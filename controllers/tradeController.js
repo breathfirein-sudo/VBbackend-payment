@@ -13,13 +13,14 @@ const getExpiryMs = (interval) => {
 
 const buyTrade = async (req, res) => {
   const { symbol, price, quantity, interval } = req.body;
+  const email = req.user.email.toLowerCase();
   try {
     const ms = getExpiryMs(interval);
     const expiryTime = new Date(Date.now() + ms);
 
     const result = await db.query(
-      'INSERT INTO trades (symbol, price, quantity, type, status, expiry_time) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [symbol, price, quantity, 'BUY', 'OPEN', expiryTime]
+      'INSERT INTO trades (symbol, price, quantity, type, status, expiry_time, user_email) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [symbol, price, quantity, 'BUY', 'OPEN', expiryTime, email]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -30,13 +31,14 @@ const buyTrade = async (req, res) => {
 
 const sellTrade = async (req, res) => {
   const { symbol, price, quantity, interval } = req.body;
+  const email = req.user.email.toLowerCase();
   try {
     const ms = getExpiryMs(interval);
     const expiryTime = new Date(Date.now() + ms);
 
     const result = await db.query(
-      'INSERT INTO trades (symbol, price, quantity, type, status, expiry_time) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-      [symbol, price, quantity, 'SELL', 'OPEN', expiryTime]
+      'INSERT INTO trades (symbol, price, quantity, type, status, expiry_time, user_email) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [symbol, price, quantity, 'SELL', 'OPEN', expiryTime, email]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -46,8 +48,9 @@ const sellTrade = async (req, res) => {
 };
 
 const getTrades = async (req, res) => {
+  const email = req.user.email.toLowerCase();
   try {
-    const result = await db.query('SELECT * FROM trades ORDER BY timestamp DESC LIMIT 100');
+    const result = await db.query('SELECT * FROM trades WHERE user_email = $1 ORDER BY timestamp DESC LIMIT 100', [email]);
     res.json(result.rows);
   } catch (error) {
     console.error('Error fetching trades:', error);

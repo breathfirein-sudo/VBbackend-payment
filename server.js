@@ -11,7 +11,11 @@ const setupSocket = require('./socket');
 const app = express();
 const server = http.createServer(app);
 
-app.use(cors({ origin: ['http://localhost:5173', 'http://localhost:5174'] }));
+const allowedOrigins = process.env.FRONTEND_ORIGINS 
+  ? process.env.FRONTEND_ORIGINS.split(',') 
+  : ['http://localhost:5173', 'http://localhost:5174', 'https://invest-hour.com', 'https://www.invest-hour.com'];
+
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
 // Mount API routes
@@ -19,11 +23,12 @@ app.use('/api', chartRoutes);
 app.use('/api', tradeRoutes);
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
+app.use('/api/contest', require('./routes/contestRoutes'));
 
 // Setup Socket.io
 const io = new Server(server, {
   cors: {
-    origin: ['http://localhost:5173', 'http://localhost:5174'],
+    origin: allowedOrigins,
     methods: ['GET', 'POST']
   }
 });

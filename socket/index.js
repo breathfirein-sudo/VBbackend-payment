@@ -17,6 +17,7 @@ const setupSocket = (io) => {
   // Global background worker to resolve expired trades
   setInterval(async () => {
     try {
+      // 1. Resolve standard paper trades
       const { rows: expiredTrades } = await db.query(
         "SELECT * FROM trades WHERE status = 'OPEN' AND expiry_time <= CURRENT_TIMESTAMP"
       );
@@ -43,8 +44,120 @@ const setupSocket = (io) => {
 
           // Broadcast to all clients
           io.emit('trade_resolved', { ...trade, status: newStatus, close_price: currentPrice });
+        } else {
+          // If candles are empty, Yahoo Finance failed or symbol is delisted.
+          // Resolve as TIE to prevent infinite loop spamming the server
+          await db.query(
+            "UPDATE trades SET status = 'TIE', close_price = price WHERE id = $1",
+            [trade.id]
+          );
+          io.emit('trade_resolved', { ...trade, status: 'TIE', close_price: trade.price });
         }
       }
+
+      // 2. Resolve contest paper trades
+      const { rows: expiredContestTrades } = await db.query(
+        "SELECT * FROM contest_trades WHERE status = 'OPEN' AND expiry_time <= CURRENT_TIMESTAMP"
+      );
+
+      for (let trade of expiredContestTrades) {
+        const candles = await getFinnhubCandles(trade.symbol, '1m', 1);
+        if (candles && candles.length > 0) {
+          const currentPrice = candles[candles.length - 1].close;
+          let newStatus = 'TIE';
+          let pnl = 0;
+          const entryAmount = parseFloat(trade.entry_amount);
+
+          if (trade.type === 'BUY') {
+            if (currentPrice > trade.price) {
+              newStatus = 'WON';
+              pnl = entryAmount * 0.8;
+            } else if (currentPrice < trade.price) {
+              newStatus = 'LOST';
+              pnl = -entryAmount;
+            }
+          } else if (trade.type === 'SELL') {
+            if (currentPrice < trade.price) {
+              newStatus = 'WON';
+              pnl = entryAmount * 0.8;
+            } else if (currentPrice > trade.price) {
+              newStatus = 'LOST';
+              pnl = -entryAmount;
+            }
+          }
+
+          await db.query('BEGIN');
+          try {
+            await db.query(
+              "UPDATE contest_trades SET status = $1, close_price = $2, pnl = $3 WHERE id = $4",
+              [newStatus, currentPrice, pnl, trade.id]
+            );
+
+            const isWin = newStatus === 'WON';
+            const isLoss = newStatus === 'LOST';
+            const refundAmount = isWin ? (entryAmount + pnl) : (newStatus === 'TIE' ? entryAmount : 0);
+
+            await db.query(
+              `UPDATE contest_participants 
+               SET balance = balance + $1,
+                   total_trades = total_trades + 1,
+                   profit_trades = profit_trades + $2,
+                   loss_trades = loss_trades + $3,
+                   success_rate = ((profit_trades + $2)::numeric / (total_trades + 1)) * 100
+               WHERE email = $4`,
+              [
+                refundAmount,
+                isWin ? 1 : 0,
+                isLoss ? 1 : 0,
+                trade.user_email
+              ]
+            );
+
+            await db.query('COMMIT');
+
+            io.emit('contest_trade_resolved', {
+              ...trade,
+              status: newStatus,
+              close_price: currentPrice,
+              pnl,
+              balance_refund: refundAmount
+            });
+          } catch (txErr) {
+            await db.query('ROLLBACK');
+            console.error('Error executing contest trade resolution transaction:', txErr.message);
+          }
+        } else {
+          // Resolve failed contest trade as TIE and refund risk amount to balance
+          await db.query('BEGIN');
+          try {
+            await db.query(
+              "UPDATE contest_trades SET status = 'TIE', close_price = price, pnl = 0.00 WHERE id = $1",
+              [trade.id]
+            );
+            const entryAmount = parseFloat(trade.entry_amount);
+            await db.query(
+              `UPDATE contest_participants 
+               SET balance = balance + $1,
+                   total_trades = total_trades + 1
+               WHERE email = $2`,
+              [entryAmount, trade.user_email]
+            );
+            await db.query('COMMIT');
+            
+            io.emit('contest_trade_resolved', {
+              ...trade,
+              status: 'TIE',
+              close_price: trade.price,
+              pnl: 0,
+              balance_refund: entryAmount
+            });
+          } catch (txErr) {
+            await db.query('ROLLBACK');
+            console.error('Error resolving failed contest trade:', txErr.message);
+          }
+        }
+      }
+
     } catch (err) {
       console.error('Error resolving trades:', err.message);
     }

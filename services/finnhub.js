@@ -21,6 +21,12 @@ const getIntervalString = (frontendInterval) => {
 
 const getFinnhubCandles = async (symbol, interval, count = 100) => {
   try {
+    let yahooSymbol = symbol;
+    // Map 6-character forex pairs (e.g. GBPUSD) to Yahoo format (GBPUSD=X)
+    if (/^[A-Za-z]{6}$/.test(symbol)) {
+      yahooSymbol = `${symbol.toUpperCase()}=X`;
+    }
+
     const period = getIntervalString(interval);
     
     // Yahoo uses actual date objects or timestamps
@@ -40,7 +46,7 @@ const getFinnhubCandles = async (symbol, interval, count = 100) => {
     const from = new Date(to.getTime() - (lookbackDays * 86400 * 1000)); 
 
     const queryOptions = { period1: from, period2: to, interval: period };
-    const result = await yahooFinance.chart(symbol, queryOptions);
+    const result = await yahooFinance.chart(yahooSymbol, queryOptions);
     
     if (result && result.quotes && result.quotes.length > 0) {
       const candles = [];
@@ -63,7 +69,7 @@ const getFinnhubCandles = async (symbol, interval, count = 100) => {
       return [];
     }
   } catch (error) {
-    console.error('Error fetching from Yahoo Finance:', error.message);
+    console.error(`Error fetching ${yahooSymbol} (${interval}) from Yahoo Finance:`, error.message);
     return [];
   }
 };
