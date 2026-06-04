@@ -14,7 +14,7 @@ router.get('/leaderboard', contestController.getLeaderboard);
 
 // Admin helper middleware
 const requireAdmin = (req, res, next) => {
-  if (req.user && req.user.email.toLowerCase() === 'shivaram33987@gmail.com') {
+  if (req.user && req.user.email.toLowerCase() === 'sandeepkumar.pikili@vrpigroup.co.in') {
     return next();
   }
   return res.status(403).json({ success: false, error: 'Forbidden: Super Admin access required' });
