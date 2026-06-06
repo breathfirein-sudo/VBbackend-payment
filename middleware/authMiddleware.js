@@ -11,26 +11,19 @@ const requireAuth = async (req, res, next) => {
     }
 
     const token = authHeader.split(' ')[1];
-
-    // Note: If you are using Firebase Auth, you would typically use firebase-admin.auth().verifyIdToken(token) here.
-    // For now, we will assume standard JWT or a mocked decode since Firebase wasn't strictly configured in backend.
-    // If you haven't implemented backend JWT signing, we bypass the signature verification and decode the email,
-    // just for the sake of making this work with your existing Firebase frontend token if it's sent as a bearer token.
     
-    // As a robust placeholder for development, we just try to decode it.
     let email;
-
+    let decoded;
+    
     if (token === 'dummy-token-for-dev') {
       email = 'testuser@example.com';
     } else {
-      let decoded;
       try {
         decoded = jwt.verify(token, process.env.JWT_SECRET || 'replace-with-your-secret');
       } catch (err) {
-        decoded = jwt.decode(token);
-        if (!decoded) throw new Error('Invalid token format');
+        return res.status(401).json({ success: false, error: 'Unauthorized: Invalid token format' });
       }
-      email = decoded.email || decoded.email_address || (decoded.user && decoded.user.email);
+      email = decoded.email;
     }
     
     if (!email) {
@@ -49,7 +42,7 @@ const requireAuth = async (req, res, next) => {
     }
 
     if (!user) {
-      // Auto-create user if they don't exist in PostgreSQL yet (useful for Firebase integration)
+      // Auto-create user if they don't exist
       user = await prisma.user.create({
         data: {
           email: email.toLowerCase(),

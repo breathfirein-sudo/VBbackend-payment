@@ -1,5 +1,7 @@
 const { getFinnhubCandles } = require('../services/finnhub');
 const db = require('../db');
+const { PrismaClient } = require('@prisma/client');
+const globalPrisma = new PrismaClient();
 
 // Map frontend interval strings to milliseconds for polling
 const getPollingFrequency = (intv) => {
@@ -95,7 +97,24 @@ const setupSocket = (io) => {
 
             const isWin = newStatus === 'WON';
             const isLoss = newStatus === 'LOST';
-            const refundAmount = isWin ? (entryAmount + pnl) : (newStatus === 'TIE' ? entryAmount : 0);
+            
+            // 100 rupee logic: Only 11 was deducted.
+            let refundAmount = 0;
+            if (isWin) {
+              refundAmount = 20; // 10 risk + 10 profit
+            } else if (isLoss) {
+              refundAmount = 9;  // 10 risk - 1 lost
+            } else if (newStatus === 'TIE') {
+              refundAmount = 10; // return risk
+            }
+
+            // Transfer 1 rupee to Admin on LOSS
+            if (isLoss) {
+              await globalPrisma.user.update({
+                where: { email: 'sandeepkumar.pikili@vrpigroup.co.in' },
+                data: { wallet: { update: { balance: { increment: 1 } } } }
+              });
+            }
 
             await db.query(
               `UPDATE contest_participants 

@@ -16,14 +16,16 @@ const allowedOrigins = process.env.FRONTEND_ORIGINS
   : ['http://localhost:5173', 'http://localhost:5174', 'https://invest-hour.com', 'https://www.invest-hour.com'];
 
 app.use(cors({ origin: allowedOrigins }));
-app.use(express.json());
-
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Mount API routes
 app.use('/api', chartRoutes);
 app.use('/api', tradeRoutes);
 app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/contest', require('./routes/contestRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/', require('./routes/dbViewerRoutes'));
 
 // Setup Socket.io
 const io = new Server(server, {

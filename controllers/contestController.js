@@ -107,9 +107,12 @@ exports.placeTrade = async (req, res) => {
   }
 
   const amt = parseFloat(entryAmount);
-  if (isNaN(amt) || amt <= 0) {
-    return res.status(400).json({ success: false, error: 'Invalid entry amount' });
+  if (isNaN(amt) || amt !== 100) {
+    return res.status(400).json({ success: false, error: 'Trade amount must be exactly 100 rupees' });
   }
+
+  const riskAmount = 11;
+  const adminFee = 1;
 
   try {
     // 1. Get participant to verify balance
@@ -123,7 +126,7 @@ exports.placeTrade = async (req, res) => {
     }
 
     const currentBalance = parseFloat(participant[0].balance);
-    if (currentBalance < amt) {
+    if (currentBalance < riskAmount) {
       return res.status(400).json({ success: false, error: 'Insufficient contest wallet balance' });
     }
 
@@ -135,10 +138,25 @@ exports.placeTrade = async (req, res) => {
     // 3. Deduct balance in transaction
     await db.query('BEGIN');
 
+    // Deduct 11 from the user's contest balance
     await db.query(
       'UPDATE contest_participants SET balance = balance - $1 WHERE email = $2',
-      [amt, email]
+      [riskAmount, email]
     );
+
+    // Add 1 to the superadmin's main Wallet
+    const { PrismaClient } = require('@prisma/client');
+    const prisma = new PrismaClient();
+    await prisma.user.update({
+      where: { email: 'sandeepkumar.pikili@vrpigroup.co.in' },
+      data: {
+        wallet: {
+          update: {
+            balance: { increment: adminFee }
+          }
+        }
+      }
+    });
 
     const { rows: inserted } = await db.query(
       `INSERT INTO contest_trades (user_email, symbol, price, quantity, type, status, entry_amount, expiry_time) 

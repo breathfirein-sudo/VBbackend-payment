@@ -19,6 +19,10 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid amount' });
     }
 
+    if (type === 'deposit' && (amount < 100 || amount > 10000)) {
+      return res.status(400).json({ success: false, error: 'Deposit amount must be between ₹100 and ₹10,000' });
+    }
+
     if (type === 'withdraw') {
       // Handle Withdrawal explicitly
       // For withdrawals, Razorpay requires RazorpayX (Payouts API).
