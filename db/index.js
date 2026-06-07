@@ -6,6 +6,11 @@ const pool = new Pool({
   ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
 });
 
+// Prevent unhandled error event from crashing the server when connection to db is reset
+pool.on('error', (err) => {
+  console.error('Unexpected error on idle pg client:', err.message || err);
+});
+
 // Auto-initialize the trades table if it doesn't exist
 pool.query(`
   CREATE TABLE IF NOT EXISTS trades (
