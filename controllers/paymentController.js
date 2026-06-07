@@ -230,7 +230,7 @@ exports.createOrder = async (req, res) => {
     });
   } catch (error) {
     console.error('Create Order Error:', error);
-    res.status(500).json({ success: false, error: 'Failed to create payment order' });
+    res.status(500).json({ success: false, error: 'Failed to create payment order', details: error.message, stack: error.stack });
   }
 };
 
@@ -288,7 +288,7 @@ exports.verifyPayment = async (req, res) => {
     res.status(200).json({ success: true, message: 'Payment verified and funds added to wallet' });
   } catch (error) {
     console.error('Verify Payment Error:', error);
-    res.status(500).json({ success: false, error: 'Failed to verify payment' });
+    res.status(500).json({ success: false, error: 'Failed to verify payment', details: error.message, stack: error.stack });
   }
 };
 
@@ -302,7 +302,7 @@ exports.getPaymentHistory = async (req, res) => {
     res.status(200).json({ success: true, data: payments });
   } catch (error) {
     console.error('Fetch Payments Error:', error);
-    res.status(500).json({ success: false, error: 'Failed to fetch payment history' });
+    res.status(500).json({ success: false, error: 'Failed to fetch payment history', details: error.message });
   }
 };
 
@@ -322,6 +322,6 @@ exports.getPaymentDetails = async (req, res) => {
     res.status(200).json({ success: true, data: payment });
   } catch (error) {
     console.error('Fetch Payment Details Error:', error);
-    res.status(500).json({ success: false, error: 'Failed to fetch payment details' });
+    res.status(500).json({ success: false, error: 'Failed to fetch payment details', details: error.message });
   }
 };
