@@ -56,10 +56,10 @@ async function runTests() {
     });
 
     console.log(`✅ Referrer Updated Wallet Balance: ₹${referrerWallet.balance}`);
-    if (referrerWallet.balance === 100010) {
+    if (referrerWallet.balance === 10) {
       console.log("\n🎉 SUCCESS: Referrer wallet balance successfully incremented by ₹10!");
     } else {
-      throw new Error(`Referrer balance was expected to be 100010, but got: ${referrerWallet.balance}`);
+      throw new Error(`Referrer balance was expected to be 10, but got: ${referrerWallet.balance}`);
     }
 
   } catch (error) {

@@ -197,7 +197,7 @@ exports.register = async (req, res) => {
         name: name || email.split('@')[0],
         password: hashedPassword,
         wallet: {
-          create: { balance: 100000 } // start with 100,000 balance
+          create: { balance: 0 } // start with 0 balance
         }
       }
     });
@@ -213,7 +213,7 @@ exports.register = async (req, res) => {
           await prisma.wallet.create({
             data: {
               userId: referrer.id,
-              balance: 100010 // default 100,000 + 10 bonus
+              balance: 10 // default 0 + 10 bonus
             }
           });
         } else {

@@ -48,7 +48,7 @@ const requireAuth = async (req, res, next) => {
           email: email.toLowerCase(),
           name: (typeof decoded !== 'undefined' && decoded && decoded.name) ? decoded.name : email.split('@')[0],
           wallet: {
-            create: { balance: 100000 } // Initialize empty wallet with default paper trading balance
+            create: { balance: 0 } // Initialize empty wallet
           }
         },
         include: { wallet: true }
