@@ -161,35 +161,33 @@ exports.register = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Email is already registered' });
     }
 
-    if (!referralCode) {
-      return res.status(400).json({ success: false, error: 'A valid referral code is required to create an account' });
-    }
-
     let referrer = null;
-    const refUpper = referralCode.toUpperCase();
+    if (referralCode) {
+      const refUpper = referralCode.toUpperCase();
 
-    if (refUpper === 'INVEST-WELCOME') {
-      // Super Admin referral
-      referrer = await prisma.user.findFirst({
-        where: { email: 'sandeepkumar.pikili@vrpigroup.co.in' }
-      });
-    } else if (refUpper.startsWith('IH-')) {
-      const codeWithoutPrefix = refUpper.replace('IH-', '').toLowerCase();
-      // Use a targeted DB query instead of loading all users
-      const allUsers = await prisma.user.findMany({
-        where: {
-          email: {
-            startsWith: codeWithoutPrefix + '@',
-            mode: 'insensitive'
-          }
-        },
-        take: 1
-      });
-      referrer = allUsers[0] || null;
-    }
+      if (refUpper === 'INVEST-WELCOME') {
+        // Super Admin referral
+        referrer = await prisma.user.findFirst({
+          where: { email: 'sandeepkumar.pikili@vrpigroup.co.in' }
+        });
+      } else if (refUpper.startsWith('IH-')) {
+        const codeWithoutPrefix = refUpper.replace('IH-', '').toLowerCase();
+        // Use a targeted DB query instead of loading all users
+        const allUsers = await prisma.user.findMany({
+          where: {
+            email: {
+              startsWith: codeWithoutPrefix + '@',
+              mode: 'insensitive'
+            }
+          },
+          take: 1
+        });
+        referrer = allUsers[0] || null;
+      }
 
-    if (!referrer) {
-      return res.status(400).json({ success: false, error: 'Invalid referral code' });
+      if (!referrer) {
+        return res.status(400).json({ success: false, error: 'Invalid referral code' });
+      }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -199,7 +197,7 @@ exports.register = async (req, res) => {
         name: name || email.split('@')[0],
         password: hashedPassword,
         wallet: {
-          create: { balance: 0 } // start with 0 balance
+          create: { balance: 100000 } // start with 100,000 balance
         }
       }
     });
@@ -228,6 +226,17 @@ exports.register = async (req, res) => {
         await prisma.user.update({
           where: { id: referrer.id },
           data: { referralCount: { increment: 1 } }
+        });
+
+        // Record the transaction log in database
+        await prisma.transaction.create({
+          data: {
+            userId: referrer.id,
+            type: 'deposit',
+            asset: 'wallet',
+            amount: 10,
+            details: `Referral bonus for inviting ${email.toLowerCase()}`
+          }
         });
       }
     const token = jwt.sign(

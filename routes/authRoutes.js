@@ -15,9 +15,23 @@ router.post('/validate', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email) return res.status(400).json({ valid: false });
-    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() },
+      include: {
+        wallet: true,
+        transactions: {
+          orderBy: { createdAt: 'desc' }
+        }
+      }
+    });
     if (user) {
-      res.json({ valid: true, referralCount: user.referralCount });
+      res.json({
+        valid: true,
+        referralCount: user.referralCount,
+        walletBalance: user.wallet?.balance || 0,
+        kycStatus: user.kycStatus || 'Pending',
+        transactions: user.transactions || []
+      });
     } else {
       res.json({ valid: false });
     }
