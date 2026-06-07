@@ -11,11 +11,8 @@ const setupSocket = require('./socket');
 const app = express();
 const server = http.createServer(app);
 
-const allowedOrigins = process.env.FRONTEND_ORIGINS 
-  ? process.env.FRONTEND_ORIGINS.split(',') 
-  : ['http://localhost:5173', 'http://localhost:5174', 'https://invest-hour.com', 'https://www.invest-hour.com'];
-
-app.use(cors({ origin: allowedOrigins }));
+// Allow all origins to prevent strict CORS blocking (safe since we use JWTs, not cookies)
+app.use(cors({ origin: '*' }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Request timeout middleware (30s default, prevents hanging requests)
@@ -42,7 +39,7 @@ app.use('/', require('./routes/dbViewerRoutes'));
 // Setup Socket.io
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: '*',
     methods: ['GET', 'POST']
   }
 });
