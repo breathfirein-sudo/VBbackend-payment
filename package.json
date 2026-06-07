@@ -7,7 +7,8 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "migrate": "prisma migrate dev --name init",
-    "generate": "prisma generate"
+    "generate": "prisma generate",
+    "postinstall": "prisma generate"
   },
   "dependencies": {
     "@prisma/client": "^5.17.0",
@@ -19,12 +20,12 @@
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^8.0.7",
     "pg": "^8.21.0",
+    "prisma": "^5.17.0",
     "razorpay": "^2.9.6",
     "socket.io": "^4.8.3",
     "yahoo-finance2": "^3.14.1"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14",
-    "prisma": "^5.17.0"
+    "nodemon": "^3.1.14"
   }
 }

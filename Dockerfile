@@ -5,6 +5,7 @@ COPY package.json package-lock.json ./
 RUN npm install --production
 
 COPY . .
+RUN npx prisma generate
 
 EXPOSE 5000
 CMD ["node", "server.js"]

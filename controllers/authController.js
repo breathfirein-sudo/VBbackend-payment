@@ -151,9 +151,18 @@ exports.register = async (req, res) => {
         where: { email: 'sandeepkumar.pikili@vrpigroup.co.in' }
       });
     } else if (refUpper.startsWith('IH-')) {
-      const codeWithoutPrefix = refUpper.replace('IH-', '');
-      const users = await prisma.user.findMany();
-      referrer = users.find(u => u.email.split('@')[0].toUpperCase() === codeWithoutPrefix);
+      const codeWithoutPrefix = refUpper.replace('IH-', '').toLowerCase();
+      // Use a targeted DB query instead of loading all users
+      const allUsers = await prisma.user.findMany({
+        where: {
+          email: {
+            startsWith: codeWithoutPrefix + '@',
+            mode: 'insensitive'
+          }
+        },
+        take: 1
+      });
+      referrer = allUsers[0] || null;
     }
 
     if (!referrer) {

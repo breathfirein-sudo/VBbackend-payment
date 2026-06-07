@@ -18,6 +18,18 @@ const allowedOrigins = process.env.FRONTEND_ORIGINS
 app.use(cors({ origin: allowedOrigins }));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// Request timeout middleware (30s default, prevents hanging requests)
+app.use((req, res, next) => {
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+  next();
+});
+
+// Health check endpoint (keeps Render from cold-starting)
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: Date.now() });
+});
+
 // Mount API routes
 app.use('/api', chartRoutes);
 app.use('/api', tradeRoutes);
