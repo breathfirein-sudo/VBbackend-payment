@@ -12,32 +12,49 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const otpStore = new Map();
 const resetTokenStore = new Map(); // token -> { email, expiresAt }
 
-// Configure Nodemailer transporter
-const transporter = process.env.RESEND_API_KEY 
-  ? nodemailer.createTransport({
-      host: 'smtp.resend.com',
-      port: 465,
-      secure: true,
-      auth: {
-        user: 'resend',
-        pass: process.env.RESEND_API_KEY,
-      },
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 5000,
-    })
-  : nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_PASS,
-      },
-      connectionTimeout: 5000,
-      greetingTimeout: 5000,
-      socketTimeout: 5000,
-    });
+// Configure Nodemailer transporter (Only used for Gmail fallback now)
+const transporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS,
+  },
+  connectionTimeout: 5000,
+  greetingTimeout: 5000,
+  socketTimeout: 5000,
+});
 
 const getFromEmail = () => process.env.RESEND_API_KEY ? (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev') : process.env.GMAIL_USER;
+
+// Helper to send email via Resend HTTP API (unblocked) or Gmail SMTP
+const sendEmailHelper = async (mailOptions) => {
+  if (process.env.RESEND_API_KEY) {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.RESEND_API_KEY}`
+      },
+      body: JSON.stringify({
+        from: mailOptions.from,
+        to: mailOptions.to,
+        subject: mailOptions.subject,
+        html: mailOptions.html,
+        text: mailOptions.text
+      })
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(`Resend API Error: ${JSON.stringify(errorData)}`);
+    }
+    return await response.json();
+  } else if (process.env.GMAIL_USER && process.env.GMAIL_USER !== 'YOUR_GMAIL') {
+    return await transporter.sendMail(mailOptions);
+  } else {
+    throw new Error('No email provider configured.');
+  }
+};
 
 exports.sendOtp = async (req, res) => {
   const { email } = req.body;
@@ -72,11 +89,11 @@ exports.sendOtp = async (req, res) => {
 
     if (process.env.RESEND_API_KEY || (process.env.GMAIL_USER && process.env.GMAIL_USER !== 'YOUR_GMAIL')) {
       try {
-        await transporter.sendMail(mailOptions);
-        console.log(`[SMTP] Successfully dispatched OTP to ${email}`);
+        await sendEmailHelper(mailOptions);
+        console.log(`[Email] Successfully dispatched OTP to ${email}`);
       } catch (smtpError) {
-        console.error('[SMTP Error] Failed to send email via Gmail:', smtpError.message);
-        // Fallback to MOCK OTP so the app doesn't break locally if SMTP fails
+        console.error('[Email Error] Failed to send OTP:', smtpError.message);
+        // Fallback to MOCK OTP so the app doesn't break locally if email fails
         console.log(`[MOCK OTP FALLBACK] Email: ${email}, OTP: ${otp}`);
         return res.status(200).json({ 
           success: true,
@@ -329,10 +346,10 @@ exports.forgotPassword = async (req, res) => {
 
     if (process.env.RESEND_API_KEY || (process.env.GMAIL_USER && process.env.GMAIL_USER !== 'YOUR_GMAIL')) {
       try {
-        await transporter.sendMail(mailOptions);
-        console.log(`[SMTP] Password Reset Link sent to ${email}`);
+        await sendEmailHelper(mailOptions);
+        console.log(`[Email] Password Reset Link sent to ${email}`);
       } catch (smtpError) {
-        console.error('[SMTP Error] Password Reset Link Gmail failed:', smtpError.message);
+        console.error('[Email Error] Password Reset Link failed:', smtpError.message);
         console.log(`[MOCK RESET LINK FALLBACK] Email: ${email}, Link: ${resetLink}`);
         return res.status(200).json({
           success: true,
