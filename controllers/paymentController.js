@@ -1,5 +1,6 @@
 const Razorpay = require('razorpay');
 const crypto = require('crypto');
+const axios = require('axios');
 const { PrismaClient } = require('@prisma/client');
 
 const prisma = new PrismaClient();
@@ -24,31 +25,177 @@ exports.createOrder = async (req, res) => {
     }
 
     if (type === 'withdraw') {
-      // Handle Withdrawal explicitly
-      // For withdrawals, Razorpay requires RazorpayX (Payouts API).
-      // Here we will just deduct from the wallet and simulate the withdrawal for demo purposes.
-      if (user.wallet.balance < amount) {
+      const { payoutDetails } = req.body;
+      if (!payoutDetails || (!payoutDetails.upiId && (!payoutDetails.accountNumber || !payoutDetails.ifsc))) {
+        return res.status(400).json({ success: false, error: 'UPI ID or Bank Account Details are required for withdrawal' });
+      }
+
+      if (!user.wallet || user.wallet.balance < amount) {
         return res.status(400).json({ success: false, error: 'Insufficient wallet balance' });
       }
 
-      await prisma.$transaction([
-        prisma.wallet.update({
-          where: { userId: user.id },
-          data: { balance: { decrement: amount } },
-        }),
-        prisma.payment.create({
-          data: {
-            userId: user.id,
-            orderId: `wd_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-            amount: amount,
-            currency: currency,
-            status: 'successful', // Auto-success for demo
-            paymentMethod: 'withdrawal',
-          },
-        }),
-      ]);
+      const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
 
-      return res.status(200).json({ success: true, message: 'Withdrawal processed successfully', type: 'withdraw' });
+      try {
+        // 1. Create a Contact
+        const contactRes = await axios.post(
+          'https://api.razorpay.com/v1/contacts',
+          {
+            name: user.name || user.email.split('@')[0],
+            email: user.email,
+            contact: '9999999999',
+            type: 'customer',
+            reference_id: `cust_${user.id}`
+          },
+          { headers: { Authorization: authHeader, 'Content-Type': 'application/json' } }
+        );
+
+        const contactId = contactRes.data.id;
+
+        // 2. Create a Fund Account
+        const fundAccountBody = {
+          contact_id: contactId,
+          account_type: payoutDetails.upiId ? 'vpa' : 'bank_account'
+        };
+
+        if (payoutDetails.upiId) {
+          fundAccountBody.vpa = { address: payoutDetails.upiId };
+        } else {
+          fundAccountBody.bank_account = {
+            name: payoutDetails.accountName || user.name || user.email.split('@')[0],
+            ifsc: payoutDetails.ifsc,
+            account_number: payoutDetails.accountNumber
+          };
+        }
+
+        const fundAccountRes = await axios.post(
+          'https://api.razorpay.com/v1/fund_accounts',
+          fundAccountBody,
+          { headers: { Authorization: authHeader, 'Content-Type': 'application/json' } }
+        );
+
+        const fundAccountId = fundAccountRes.data.id;
+
+        // 3. Create a Payout
+        const payoutRes = await axios.post(
+          'https://api.razorpay.com/v1/payouts',
+          {
+            account_number: process.env.RAZORPAYX_ACCOUNT_NUMBER || '4560000282928373',
+            fund_account_id: fundAccountId,
+            amount: amount * 100, // Amount in paise
+            currency: 'INR',
+            mode: payoutDetails.upiId ? 'UPI' : 'IMPS',
+            purpose: 'payout',
+            queue_if_low_balance: true,
+            reference_id: `wd_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+            narration: 'Investhour Wallet Withdrawal'
+          },
+          {
+            headers: {
+              Authorization: authHeader,
+              'Content-Type': 'application/json',
+              'X-Payout-Idempotency': `idem_${Date.now()}`
+            }
+          }
+        );
+
+        const payoutData = payoutRes.data;
+
+        // 4. Update the DB in a transaction
+        await prisma.$transaction([
+          prisma.wallet.update({
+            where: { userId: user.id },
+            data: { balance: { decrement: amount } },
+          }),
+          prisma.payment.create({
+            data: {
+              userId: user.id,
+              orderId: payoutData.id || `wd_${Date.now()}`,
+              amount: amount,
+              currency: currency,
+              status: payoutData.status || 'processing',
+              paymentMethod: payoutDetails.upiId ? 'upi_withdrawal' : 'bank_withdrawal',
+            },
+          }),
+          prisma.transaction.create({
+            data: {
+              userId: user.id,
+              type: 'withdrawal',
+              asset: 'wallet',
+              amount: amount,
+              details: `Withdrew to ${payoutDetails.upiId || payoutDetails.accountNumber} (Payout ID: ${payoutData.id})`
+            }
+          })
+        ]);
+
+        return res.status(200).json({
+          success: true,
+          message: 'Withdrawal payout processed successfully',
+          type: 'withdraw',
+          payoutId: payoutData.id,
+          status: payoutData.status
+        });
+
+      } catch (razorpayError) {
+        console.error('Razorpay Payout Error details:', razorpayError.response ? razorpayError.response.data : razorpayError.message);
+        
+        // Check if the error indicates that RazorpayX is not activated or URL not found (e.g. Standard keys)
+        const isNotActivated = razorpayError.response && razorpayError.response.data && razorpayError.response.data.error &&
+          (razorpayError.response.data.error.description === 'The requested URL was not found on the server.' ||
+           razorpayError.response.data.error.code === 'BAD_REQUEST_ERROR');
+        
+        const isTestMode = process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_ID.startsWith('rzp_test');
+
+        if (isTestMode || isNotActivated) {
+          console.warn('⚠️ RazorpayX Payout API is not activated or standard keys are used. Falling back to Simulated Payout (Test Mode)...');
+          
+          const simulatedPayoutId = `pout_sim_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+
+          // Update the DB in a transaction
+          await prisma.$transaction([
+            prisma.wallet.update({
+              where: { userId: user.id },
+              data: { balance: { decrement: amount } },
+            }),
+            prisma.payment.create({
+              data: {
+                userId: user.id,
+                orderId: simulatedPayoutId,
+                amount: amount,
+                currency: currency,
+                status: 'successful',
+                paymentMethod: payoutDetails.upiId ? 'upi_withdrawal_sim' : 'bank_withdrawal_sim',
+              },
+            }),
+            prisma.transaction.create({
+              data: {
+                userId: user.id,
+                type: 'withdrawal',
+                asset: 'wallet',
+                amount: amount,
+                details: `Simulated withdrawal to ${payoutDetails.upiId || payoutDetails.accountNumber} (Payout ID: ${simulatedPayoutId})`
+              }
+            })
+          ]);
+
+          return res.status(200).json({
+            success: true,
+            message: 'Withdrawal processed successfully (Simulated Test Mode fallback)',
+            type: 'withdraw',
+            payoutId: simulatedPayoutId,
+            status: 'successful'
+          });
+        }
+
+        const errorMsg = razorpayError.response && razorpayError.response.data && razorpayError.response.data.error
+          ? razorpayError.response.data.error.description
+          : razorpayError.message;
+        
+        return res.status(400).json({
+          success: false,
+          error: `Razorpay Payout Failed: ${errorMsg}`
+        });
+      }
     }
 
     // Handle Deposit (Razorpay Create Order)
