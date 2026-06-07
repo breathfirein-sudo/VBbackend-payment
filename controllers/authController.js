@@ -22,6 +22,9 @@ const transporter = process.env.RESEND_API_KEY
         user: 'resend',
         pass: process.env.RESEND_API_KEY,
       },
+      connectionTimeout: 5000,
+      greetingTimeout: 5000,
+      socketTimeout: 5000,
     })
   : nodemailer.createTransport({
       service: 'gmail',
@@ -29,6 +32,9 @@ const transporter = process.env.RESEND_API_KEY
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_PASS,
       },
+      connectionTimeout: 5000,
+      greetingTimeout: 5000,
+      socketTimeout: 5000,
     });
 
 const getFromEmail = () => process.env.RESEND_API_KEY ? (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev') : process.env.GMAIL_USER;
