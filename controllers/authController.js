@@ -63,16 +63,27 @@ exports.sendOtp = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Email is required' });
   }
 
-  // Generate 6-digit OTP
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-
-  // Store OTP in memory (valid for 5 minutes)
-  otpStore.set(email, {
-    otp,
-    expiresAt: Date.now() + 5 * 60 * 1000,
-  });
-
   try {
+    const emailLower = email.trim().toLowerCase();
+
+    // Check domain restriction for new signups
+    const existingUser = await prisma.user.findUnique({
+      where: { email: emailLower }
+    });
+
+    if (!existingUser && !emailLower.endsWith('@gmail.com')) {
+      return res.status(400).json({ success: false, error: 'Please enter a valid email ID' });
+    }
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Store OTP in memory (valid for 5 minutes)
+    otpStore.set(email, {
+      otp,
+      expiresAt: Date.now() + 5 * 60 * 1000,
+    });
+
     const mailOptions = {
       from: getFromEmail(),
       to: email,
@@ -152,9 +163,14 @@ exports.register = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Email and password are required' });
   }
 
+  const emailLower = email.trim().toLowerCase();
+  if (!emailLower.endsWith('@gmail.com')) {
+    return res.status(400).json({ success: false, error: 'Please enter a valid email ID' });
+  }
+
   try {
     const existingUser = await prisma.user.findUnique({
-      where: { email: email.toLowerCase() }
+      where: { email: emailLower }
     });
 
     if (existingUser) {
@@ -232,7 +248,7 @@ exports.register = async (req, res) => {
         await prisma.transaction.create({
           data: {
             userId: referrer.id,
-            type: 'deposit',
+            type: 'referral',
             asset: 'wallet',
             amount: 10,
             details: `Referral bonus for inviting ${email.toLowerCase()}`

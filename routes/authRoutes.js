@@ -25,10 +25,13 @@ router.post('/validate', async (req, res) => {
       }
     });
     if (user) {
+      const totalReferralRewards = (user.referralCount || 0) * 10;
+      const withdrawableBalance = Math.max(0, (user.wallet?.balance || 0) - totalReferralRewards);
       res.json({
         valid: true,
         referralCount: user.referralCount,
         walletBalance: user.wallet?.balance || 0,
+        withdrawableBalance: withdrawableBalance,
         kycStatus: user.kycStatus || 'Pending',
         transactions: user.transactions || []
       });

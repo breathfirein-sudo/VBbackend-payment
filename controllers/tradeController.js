@@ -11,10 +11,32 @@ const getExpiryMs = (interval) => {
   return 60000;
 };
 
+const { PrismaClient } = require('@prisma/client');
+const prisma = new PrismaClient();
+
 const buyTrade = async (req, res) => {
   const { symbol, price, quantity, interval } = req.body;
   const email = req.user.email.toLowerCase();
   try {
+    // Check user's withdrawable balance first
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: { wallet: true }
+    });
+
+    if (!user || !user.wallet) {
+      return res.status(400).json({ error: 'User wallet not found' });
+    }
+
+    const totalReferralRewards = (user.referralCount || 0) * 10;
+    const withdrawableBalance = Math.max(0, user.wallet.balance - totalReferralRewards);
+
+    if (withdrawableBalance < 100) {
+      return res.status(400).json({
+        error: `Insufficient withdrawable balance. You cannot trade with referral rewards. You need at least ₹100.00 but only have ₹${withdrawableBalance.toFixed(2)}.`
+      });
+    }
+
     const ms = getExpiryMs(interval);
     const expiryTime = new Date(Date.now() + ms);
 
@@ -33,6 +55,25 @@ const sellTrade = async (req, res) => {
   const { symbol, price, quantity, interval } = req.body;
   const email = req.user.email.toLowerCase();
   try {
+    // Check user's withdrawable balance first
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: { wallet: true }
+    });
+
+    if (!user || !user.wallet) {
+      return res.status(400).json({ error: 'User wallet not found' });
+    }
+
+    const totalReferralRewards = (user.referralCount || 0) * 10;
+    const withdrawableBalance = Math.max(0, user.wallet.balance - totalReferralRewards);
+
+    if (withdrawableBalance < 100) {
+      return res.status(400).json({
+        error: `Insufficient withdrawable balance. You cannot trade with referral rewards. You need at least ₹100.00 but only have ₹${withdrawableBalance.toFixed(2)}.`
+      });
+    }
+
     const ms = getExpiryMs(interval);
     const expiryTime = new Date(Date.now() + ms);
 

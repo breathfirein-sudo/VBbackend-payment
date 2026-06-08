@@ -20,24 +20,38 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid amount' });
     }
 
-    if (type === 'deposit' && (amount < 100 || amount > 10000)) {
-      return res.status(400).json({ success: false, error: 'Deposit amount must be between ₹100 and ₹10,000' });
+    if (type === 'deposit' && (amount < 100 || amount > 100000)) {
+      return res.status(400).json({ success: false, error: 'Deposit amount must be between ₹100 and ₹1,00,000' });
     }
 
     if (type === 'withdraw') {
       const { payoutDetails } = req.body;
+      if (amount < 500) {
+        return res.status(400).json({ success: false, error: 'Withdrawal amount must be at least ₹500' });
+      }
       if (!payoutDetails || (!payoutDetails.upiId && (!payoutDetails.accountNumber || !payoutDetails.ifsc))) {
         return res.status(400).json({ success: false, error: 'UPI ID or Bank Account Details are required for withdrawal' });
       }
 
-      if (!user.wallet || user.wallet.balance < amount) {
-        return res.status(400).json({ success: false, error: 'Insufficient wallet balance' });
+      if (!user.wallet) {
+        return res.status(400).json({ success: false, error: 'Wallet not found' });
+      }
+
+      const totalReferralRewards = (user.referralCount || 0) * 10;
+      const withdrawableBalance = Math.max(0, user.wallet.balance - totalReferralRewards);
+
+      if (withdrawableBalance < amount) {
+        return res.status(400).json({
+          success: false,
+          error: `Insufficient withdrawable balance. Your withdrawable balance is ₹${withdrawableBalance.toFixed(2)} (excludes ₹${totalReferralRewards.toFixed(2)} referral rewards).`
+        });
       }
 
       const authHeader = 'Basic ' + Buffer.from(`${process.env.RAZORPAY_KEY_ID}:${process.env.RAZORPAY_KEY_SECRET}`).toString('base64');
 
       try {
         // 1. Create a Contact
+        console.log('Sending Razorpay Contact creation request...');
         const contactRes = await axios.post(
           'https://api.razorpay.com/v1/contacts',
           {
@@ -51,6 +65,7 @@ exports.createOrder = async (req, res) => {
         );
 
         const contactId = contactRes.data.id;
+        console.log('Razorpay Contact created successfully. ID:', contactId);
 
         // 2. Create a Fund Account
         const fundAccountBody = {
@@ -68,6 +83,7 @@ exports.createOrder = async (req, res) => {
           };
         }
 
+        console.log('Sending Razorpay Fund Account creation request...');
         const fundAccountRes = await axios.post(
           'https://api.razorpay.com/v1/fund_accounts',
           fundAccountBody,
@@ -75,21 +91,24 @@ exports.createOrder = async (req, res) => {
         );
 
         const fundAccountId = fundAccountRes.data.id;
+        console.log('Razorpay Fund Account created successfully. ID:', fundAccountId);
 
         // 3. Create a Payout
+        const payoutPayload = {
+          account_number: process.env.RAZORPAYX_ACCOUNT_NUMBER || '4560000282928373',
+          fund_account_id: fundAccountId,
+          amount: amount * 100, // Amount in paise
+          currency: 'INR',
+          mode: payoutDetails.upiId ? 'UPI' : 'IMPS',
+          purpose: 'payout',
+          queue_if_low_balance: true,
+          reference_id: `wd_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+          narration: 'Investhour Wallet Withdrawal'
+        };
+        console.log('Sending Razorpay Payout request with payload:', JSON.stringify(payoutPayload));
         const payoutRes = await axios.post(
           'https://api.razorpay.com/v1/payouts',
-          {
-            account_number: process.env.RAZORPAYX_ACCOUNT_NUMBER || '4560000282928373',
-            fund_account_id: fundAccountId,
-            amount: amount * 100, // Amount in paise
-            currency: 'INR',
-            mode: payoutDetails.upiId ? 'UPI' : 'IMPS',
-            purpose: 'payout',
-            queue_if_low_balance: true,
-            reference_id: `wd_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-            narration: 'Investhour Wallet Withdrawal'
-          },
+          payoutPayload,
           {
             headers: {
               Authorization: authHeader,
@@ -100,6 +119,7 @@ exports.createOrder = async (req, res) => {
         );
 
         const payoutData = payoutRes.data;
+        console.log('Razorpay Payout created successfully. Payout ID:', payoutData.id);
 
         // 4. Update the DB in a transaction
         await prisma.$transaction([
@@ -163,7 +183,7 @@ exports.createOrder = async (req, res) => {
                 orderId: simulatedPayoutId,
                 amount: amount,
                 currency: currency,
-                status: 'successful',
+                status: 'processing',
                 paymentMethod: payoutDetails.upiId ? 'upi_withdrawal_sim' : 'bank_withdrawal_sim',
               },
             }),
@@ -183,7 +203,7 @@ exports.createOrder = async (req, res) => {
             message: 'Withdrawal processed successfully (Simulated Test Mode fallback)',
             type: 'withdraw',
             payoutId: simulatedPayoutId,
-            status: 'successful'
+            status: 'processing'
           });
         }
 
@@ -268,8 +288,8 @@ exports.verifyPayment = async (req, res) => {
       return res.status(200).json({ success: true, message: 'Payment already processed' });
     }
 
-    // Transaction: Update payment status and add funds to wallet
-    await prisma.$transaction([
+    // Transaction: Update payment status, add funds to wallet, and create a ledger entry
+    const [, updatedWallet] = await prisma.$transaction([
       prisma.payment.update({
         where: { orderId: razorpay_order_id },
         data: {
@@ -282,10 +302,23 @@ exports.verifyPayment = async (req, res) => {
         where: { userId: user.id },
         update: { balance: { increment: payment.amount } },
         create: { userId: user.id, balance: payment.amount },
+      }),
+      prisma.transaction.create({
+        data: {
+          userId: user.id,
+          type: 'deposit',
+          asset: 'wallet',
+          amount: payment.amount,
+          details: `Deposited via Razorpay (Order: ${razorpay_order_id}, Payment: ${razorpay_payment_id})`
+        }
       })
     ]);
 
-    res.status(200).json({ success: true, message: 'Payment verified and funds added to wallet' });
+    res.status(200).json({
+      success: true,
+      message: 'Payment verified and funds added to wallet',
+      newBalance: updatedWallet.balance
+    });
   } catch (error) {
     console.error('Verify Payment Error:', error);
     res.status(500).json({ success: false, error: 'Failed to verify payment', details: error.message, stack: error.stack });
