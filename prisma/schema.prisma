@@ -1,0 +1,134 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  name         String?
+  password     String?
+  wallet       Wallet?
+  trades       Trade[]
+  positions    Position[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+  payments     Payment[]
+  referralCount Int           @default(0)
+  kycStatus    String        @default("Pending")
+  kycDocument  String?       @db.Text
+  kycDocName   String?
+  kycDocType   String?
+  kycUploadedAt String?
+}
+
+model Wallet {
+  id           Int      @id @default(autoincrement())
+  user         User     @relation(fields: [userId], references: [id])
+  userId       Int      @unique
+  balance      Float    @default(0)
+  lockedAmount Float    @default(0)
+  totalPnl     Float    @default(0)
+  winRate      Float    @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Trade {
+  id              Int       @id @default(autoincrement())
+  user            User      @relation(fields: [userId], references: [id])
+  userId          Int
+  asset           String
+  side            String
+  amount          Float
+  quantity        Float
+  leverage        Int
+  entryPrice      Float
+  exitPrice       Float?
+  grossPnl        Float?
+  netPnl          Float?
+  fee             Float
+  gst             Float
+  status          String
+  durationSeconds Int
+  openedAt        DateTime  @default(now())
+  closedAt        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  position        Position?
+}
+
+model Position {
+  id         Int       @id @default(autoincrement())
+  trade      Trade     @relation(fields: [tradeId], references: [id])
+  tradeId    Int       @unique
+  openPrice  Float
+  closePrice Float?
+  quantity   Float
+  side       String
+  status     String
+  openedAt   DateTime  @default(now())
+  closedAt   DateTime?
+  user       User?     @relation(fields: [userId], references: [id])
+  userId     Int?
+}
+
+model Candle {
+  id        Int      @id @default(autoincrement())
+  asset     String
+  time      DateTime
+  open      Float
+  high      Float
+  low       Float
+  close     Float
+  volume    Float
+  createdAt DateTime @default(now())
+}
+
+model MarketTick {
+  id        Int      @id @default(autoincrement())
+  asset     String
+  timestamp DateTime
+  price     Float
+  volume    Float
+  createdAt DateTime @default(now())
+}
+
+model Transaction {
+  id        Int      @id @default(autoincrement())
+  user      User     @relation(fields: [userId], references: [id])
+  userId    Int
+  type      String
+  asset     String
+  amount    Float
+  fee       Float?
+  gst       Float?
+  details   String?
+  createdAt DateTime @default(now())
+}
+
+model Payment {
+  id                    String   @id @default(uuid())
+  user                  User     @relation(fields: [userId], references: [id])
+  userId                Int
+  orderId               String   @unique
+  paymentId             String?
+  razorpaySignature     String?
+  amount                Float
+  currency              String   @default("INR")
+  status                String   @default("created")
+  paymentMethod         String?
+  upiId                 String?
+  bankAccount           String?
+  ifsc                  String?
+  bankName              String?
+  accountHolder         String?
+  availableBalanceAfter Float?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
