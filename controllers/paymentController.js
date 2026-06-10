@@ -20,14 +20,14 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Invalid amount' });
     }
 
-    if (type === 'deposit' && (amount < 1 || amount > 100000)) {
-      return res.status(400).json({ success: false, error: 'Deposit amount must be between ₹1 and ₹1,00,000' });
+    if (type === 'deposit' && (amount < 100 || amount > 100000)) {
+      return res.status(400).json({ success: false, error: 'Deposit amount must be between ₹100 and ₹1,00,000' });
     }
 
     if (type === 'withdraw') {
       const { payoutDetails } = req.body;
-      if (amount < 1) {
-        return res.status(400).json({ success: false, error: 'Withdrawal amount must be at least ₹1' });
+      if (amount < 500) {
+        return res.status(400).json({ success: false, error: 'Withdrawal amount must be at least ₹500' });
       }
       if (!payoutDetails || (!payoutDetails.upiId && (!payoutDetails.accountNumber || !payoutDetails.ifsc))) {
         return res.status(400).json({ success: false, error: 'UPI ID or Bank Account Details are required for withdrawal' });
