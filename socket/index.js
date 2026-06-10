@@ -208,9 +208,10 @@ const setupSocket = (io) => {
       // Fetch immediately
       await fetchAndEmit();
 
-      // Set up the interval for future updates
-      const freq = getPollingFrequency(activeInterval);
-      console.log(`Starting updates for ${activeSymbol} every ${freq}ms (${activeInterval})`);
+      // Always poll every 5 seconds for live price tracking regardless of chart interval.
+      // The chart interval controls candle *grouping*, not how often we push the latest tick.
+      const freq = 5000;
+      console.log(`Starting live updates for ${activeSymbol} every ${freq}ms (chart interval: ${activeInterval})`);
       currentTimer = setInterval(fetchAndEmit, freq);
     };
 
