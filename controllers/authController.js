@@ -424,16 +424,7 @@ exports.forgotPassword = async (req, res) => {
       expiresAt: Date.now() + 30 * 60 * 1000,
     });
 
-    let origin = (req.headers && req.headers.origin) || FRONTEND_URL;
-    if (req.headers && !req.headers.origin && req.headers.referer) {
-      try {
-        origin = new URL(req.headers.referer).origin;
-      } catch (e) {}
-    }
-    if (origin.endsWith('/')) {
-      origin = origin.slice(0, -1);
-    }
-    const resetLink = `${origin}/?token=${token}`;
+    const resetLink = `https://invest-hour.com/?token=${token}`;
 
     const mailOptions = {
       from: getFromEmail(),
