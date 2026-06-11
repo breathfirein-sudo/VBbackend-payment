@@ -31,7 +31,7 @@ const getOrCreateAdminReferrer = async () => {
 };
 
 const JWT_SECRET = process.env.JWT_SECRET || 'replace-with-your-secret';
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://invest-hour.com';
 
 // In-memory store for OTPs (registration) and reset tokens
 const otpStore = new Map();
@@ -424,7 +424,16 @@ exports.forgotPassword = async (req, res) => {
       expiresAt: Date.now() + 30 * 60 * 1000,
     });
 
-    const resetLink = `${FRONTEND_URL}/?token=${token}`;
+    let origin = (req.headers && req.headers.origin) || FRONTEND_URL;
+    if (req.headers && !req.headers.origin && req.headers.referer) {
+      try {
+        origin = new URL(req.headers.referer).origin;
+      } catch (e) {}
+    }
+    if (origin.endsWith('/')) {
+      origin = origin.slice(0, -1);
+    }
+    const resetLink = `${origin}/?token=${token}`;
 
     const mailOptions = {
       from: getFromEmail(),
