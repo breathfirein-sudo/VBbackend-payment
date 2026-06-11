@@ -3,14 +3,16 @@ const router = express.Router();
 const contestController = require('../controllers/contestController');
 const { requireAuth } = require('../middleware/authMiddleware');
 
-// Require authentication for all contest routes
+// Public routes
+router.get('/leaderboard', contestController.getLeaderboard);
+
+// Require authentication for all other contest routes
 router.use(requireAuth);
 
 router.post('/register', contestController.register);
 router.get('/profile', contestController.getProfile);
 router.get('/trades', contestController.getTrades);
 router.post('/trade', contestController.placeTrade);
-router.get('/leaderboard', contestController.getLeaderboard);
 
 // Admin helper middleware
 const requireAdmin = (req, res, next) => {

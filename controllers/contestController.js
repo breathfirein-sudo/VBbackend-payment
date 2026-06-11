@@ -180,6 +180,7 @@ exports.getLeaderboard = async (req, res) => {
     const { rows } = await db.query(
       `SELECT name, email, balance, total_trades, profit_trades, loss_trades, success_rate 
        FROM contest_participants 
+       WHERE email NOT LIKE '%@vbcontest.com'
        ORDER BY success_rate DESC, total_trades DESC, balance DESC 
        LIMIT 100`
     );
