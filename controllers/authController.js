@@ -419,9 +419,11 @@ exports.forgotPassword = async (req, res) => {
 
     // Generate a secure random token (valid for 30 minutes)
     const token = crypto.randomBytes(32).toString('hex');
-    resetTokenStore.set(token, {
-      email: email.toLowerCase(),
-      expiresAt: Date.now() + 30 * 60 * 1000,
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+
+    await prisma.user.update({
+      where: { email: email.toLowerCase() },
+      data: { resetToken: token, resetTokenExpiry: expiresAt }
     });
 
     const resetLink = `https://invest-hour.com/?token=${token}`;
@@ -479,28 +481,35 @@ exports.resetPassword = async (req, res) => {
   }
 
   try {
-    const record = resetTokenStore.get(token);
-    if (!record) {
+    const user = await prisma.user.findFirst({
+      where: { resetToken: token }
+    });
+
+    if (!user || !user.resetTokenExpiry) {
       return res.status(400).json({ success: false, error: 'Invalid or expired reset link' });
     }
 
-    if (Date.now() > record.expiresAt) {
-      resetTokenStore.delete(token);
+    if (new Date() > user.resetTokenExpiry) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { resetToken: null, resetTokenExpiry: null }
+      });
       return res.status(400).json({ success: false, error: 'Reset link has expired. Please request a new one.' });
     }
-
-    // Clear token
-    resetTokenStore.delete(token);
 
     // Hash new password and update
     const hashedPassword = await bcrypt.hash(newPassword, 10);
     await prisma.user.update({
-      where: { email: record.email },
-      data: { password: hashedPassword }
+      where: { id: user.id },
+      data: { 
+        password: hashedPassword,
+        resetToken: null,
+        resetTokenExpiry: null
+      }
     });
 
-    console.log(`[Reset Password] Successfully reset password for ${record.email}`);
-    res.status(200).json({ success: true, message: 'Password has been reset successfully', email: record.email });
+    console.log(`[Reset Password] Successfully reset password for ${user.email}`);
+    res.status(200).json({ success: true, message: 'Password has been reset successfully', email: user.email });
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({ success: false, error: 'Failed to reset password: ' + error.message });

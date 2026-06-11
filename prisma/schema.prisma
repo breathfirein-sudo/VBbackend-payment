@@ -26,6 +26,8 @@ model User {
   kycDocName   String?
   kycDocType   String?
   kycUploadedAt String?
+  resetToken       String?
+  resetTokenExpiry DateTime?
 }
 
 model Wallet {
