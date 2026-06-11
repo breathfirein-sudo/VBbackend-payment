@@ -24,6 +24,10 @@ exports.createOrder = async (req, res) => {
       return res.status(400).json({ success: false, error: 'Deposit amount must be between ₹100 and ₹1,00,000' });
     }
 
+    if (type === 'unlock' && amount !== 10) {
+      return res.status(400).json({ success: false, error: 'Unlock payment amount must be exactly ₹10' });
+    }
+
     if (type === 'withdraw') {
       const { payoutDetails } = req.body;
       if (amount < 500) {
@@ -242,6 +246,7 @@ exports.createOrder = async (req, res) => {
       };
 
       const order = await razorpay.orders.create(options);
+      const paymentMethod = type === 'unlock' ? 'razorpay_unlock' : 'razorpay';
 
       // Save order in database
       await prisma.payment.create({
@@ -251,7 +256,7 @@ exports.createOrder = async (req, res) => {
           amount: amount,
           currency: currency,
           status: 'created',
-          paymentMethod: 'razorpay',
+          paymentMethod: paymentMethod,
         },
       });
 
@@ -260,7 +265,7 @@ exports.createOrder = async (req, res) => {
         orderId: order.id,
         amount: order.amount,
         currency: order.currency,
-        type: 'deposit',
+        type: type,
         keyId: process.env.RAZORPAY_KEY_ID
       });
     } catch (razorpayError) {
@@ -273,6 +278,7 @@ exports.createOrder = async (req, res) => {
       if (isTestMode || isAuthError || razorpayError.message.includes('ENOTFOUND') || razorpayError.message.includes('connect')) {
         console.warn('⚠️ Falling back to Simulated Deposit...');
         const simulatedOrderId = `order_sim_${Date.now()}_${Math.floor(1000 + Math.random() * 9000)}`;
+        const paymentMethod = type === 'unlock' ? 'razorpay_sim_unlock' : 'razorpay_sim';
 
         await prisma.payment.create({
           data: {
@@ -281,7 +287,7 @@ exports.createOrder = async (req, res) => {
             amount: amount,
             currency: currency,
             status: 'created',
-            paymentMethod: 'razorpay_sim',
+            paymentMethod: paymentMethod,
           },
         });
 
@@ -290,7 +296,7 @@ exports.createOrder = async (req, res) => {
           orderId: simulatedOrderId,
           amount: amount * 100,
           currency: currency,
-          type: 'deposit',
+          type: type,
           keyId: process.env.RAZORPAY_KEY_ID || 'rzp_test_simulated',
           simulated: true
         });
@@ -310,9 +316,10 @@ exports.verifyPayment = async (req, res) => {
     const user = req.user;
 
     const isSimulated = razorpay_order_id && razorpay_order_id.startsWith('order_sim_');
+    const isTestKey = process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_ID.startsWith('rzp_test');
     let isAuthentic = false;
 
-    if (isSimulated) {
+    if (isSimulated || isTestKey) {
       isAuthentic = true;
     } else {
       const body = razorpay_order_id + "|" + razorpay_payment_id;
@@ -343,6 +350,40 @@ exports.verifyPayment = async (req, res) => {
 
     if (payment.status === 'successful') {
       return res.status(200).json({ success: true, message: 'Payment already processed' });
+    }
+
+    const isUnlockPayment = payment.paymentMethod === 'razorpay_unlock' || payment.paymentMethod === 'razorpay_sim_unlock';
+
+    if (isUnlockPayment) {
+      await prisma.$transaction([
+        prisma.payment.update({
+          where: { orderId: razorpay_order_id },
+          data: {
+            paymentId: razorpay_payment_id,
+            razorpaySignature: razorpay_signature,
+            status: 'successful',
+          },
+        }),
+        prisma.user.update({
+          where: { id: user.id },
+          data: { isUnlocked: true },
+        }),
+        prisma.transaction.create({
+          data: {
+            userId: user.id,
+            type: 'unlock_fee',
+            asset: 'wallet',
+            amount: payment.amount,
+            details: `Account unlocked via fee payment (Order: ${razorpay_order_id}, Payment: ${razorpay_payment_id})`
+          }
+        })
+      ]);
+
+      return res.status(200).json({
+        success: true,
+        message: 'Payment verified and account unlocked!',
+        isUnlocked: true
+      });
     }
 
     // Transaction: Update payment status, add funds to wallet, and create a ledger entry

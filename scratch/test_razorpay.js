@@ -1,25 +1,24 @@
-require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const Razorpay = require('razorpay');
+require('dotenv').config();
 
-console.log('Using Key ID:', process.env.RAZORPAY_KEY_ID);
+console.log("Using Key ID:", process.env.RAZORPAY_KEY_ID);
 
 const razorpay = new Razorpay({
   key_id: process.env.RAZORPAY_KEY_ID,
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-async function testOrder() {
+async function test() {
   try {
-    const options = {
-      amount: 100, // 1 rupee (100 paise)
+    const order = await razorpay.orders.create({
+      amount: 10 * 100, // ₹10 in paise
       currency: 'INR',
       receipt: 'receipt_test_' + Date.now(),
-    };
-    const order = await razorpay.orders.create(options);
-    console.log('Order created successfully:', order);
-  } catch (error) {
-    console.error('Order creation failed:', error);
+    });
+    console.log("Success! Order created:", order);
+  } catch (err) {
+    console.error("Error creating order:", err);
   }
 }
 
-testOrder();
+test();

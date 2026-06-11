@@ -20,6 +20,7 @@ model User {
   transactions Transaction[]
   payments     Payment[]
   referralCount Int           @default(0)
+  isUnlocked   Boolean       @default(false)
   kycStatus    String        @default("Pending")
   kycDocument  String?       @db.Text
   kycDocName   String?

@@ -21,6 +21,9 @@ router.post('/delete-user', async (req, res) => {
 
     // Delete all related records in a transaction to prevent orphan records
     await prisma.$transaction([
+      prisma.$executeRawUnsafe('DELETE FROM trades WHERE user_email = $1', user.email),
+      prisma.$executeRawUnsafe('DELETE FROM contest_trades WHERE user_email = $1', user.email),
+      prisma.$executeRawUnsafe('DELETE FROM contest_participants WHERE email = $1', user.email),
       prisma.payment.deleteMany({ where: { userId: user.id } }),
       prisma.transaction.deleteMany({ where: { userId: user.id } }),
       prisma.position.deleteMany({ where: { userId: user.id } }),

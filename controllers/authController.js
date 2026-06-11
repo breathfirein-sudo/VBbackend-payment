@@ -5,6 +5,31 @@ const crypto = require('crypto');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
+const getOrCreateAdminReferrer = async () => {
+  const adminEmail = 'sandeepkumar.pikili@vrpigroup.co.in';
+  let admin = await prisma.user.findFirst({
+    where: { email: adminEmail }
+  });
+
+  if (!admin) {
+    console.log(`[Self-Healing] Admin user ${adminEmail} not found. Creating it...`);
+    const adminPasswordHash = await bcrypt.hash('Psk@300707', 10);
+    admin = await prisma.user.create({
+      data: {
+        email: adminEmail,
+        name: 'Super Admin',
+        password: adminPasswordHash,
+        wallet: {
+          create: { balance: 0 }
+        }
+      }
+    });
+    console.log(`[Self-Healing] Admin user created successfully.`);
+  }
+
+  return admin;
+};
+
 const JWT_SECRET = process.env.JWT_SECRET || 'replace-with-your-secret';
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
@@ -57,7 +82,7 @@ const sendEmailHelper = async (mailOptions) => {
 };
 
 exports.sendOtp = async (req, res) => {
-  const { email } = req.body;
+  const { email, referralCode } = req.body;
 
   if (!email) {
     return res.status(400).json({ success: false, error: 'Email is required' });
@@ -66,27 +91,67 @@ exports.sendOtp = async (req, res) => {
   try {
     const emailLower = email.trim().toLowerCase();
 
-    // Check domain restriction for new signups
+    // Check email duplication for new signups
     const existingUser = await prisma.user.findUnique({
       where: { email: emailLower }
     });
 
-    if (!existingUser && !emailLower.endsWith('@gmail.com')) {
+    if (existingUser) {
+      return res.status(400).json({ success: false, error: 'Email is already registered' });
+    }
+
+    // Check domain restriction for new signups
+    if (!emailLower.endsWith('@gmail.com')) {
       return res.status(400).json({ success: false, error: 'Please enter a valid email ID' });
+    }
+
+    // Check referral code early if provided
+    if (referralCode && referralCode.trim() !== '') {
+      const refUpper = referralCode.trim().toUpperCase();
+      let referrer = null;
+
+      const isValidFormat = (refUpper === 'INVEST-WELCOME' || refUpper.startsWith('IH-'));
+      if (!isValidFormat) {
+        return res.status(400).json({ success: false, error: 'Invalid referral code format' });
+      }
+
+      if (refUpper === 'INVEST-WELCOME') {
+        // Super Admin referral
+        referrer = await getOrCreateAdminReferrer();
+      } else if (refUpper.startsWith('IH-')) {
+        const codeWithoutPrefix = refUpper.replace('IH-', '').toLowerCase();
+        // Use a targeted DB query instead of loading all users
+        const allUsers = await prisma.user.findMany({
+          where: {
+            email: {
+              startsWith: codeWithoutPrefix + '@',
+              mode: 'insensitive'
+            }
+          },
+          take: 1
+        });
+        referrer = allUsers[0] || null;
+      }
+
+      // If the referrer doesn't exist (possibly deleted), we do NOT error out.
+      // We allow the signup to proceed, but skip the credit part.
+      if (!referrer) {
+        console.log(`[Referral] Referrer not found for code ${referralCode} (possibly deleted). Proceeding with OTP dispatch.`);
+      }
     }
 
     // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-    // Store OTP in memory (valid for 5 minutes)
-    otpStore.set(email, {
+    // Store OTP in memory (valid for 5 minutes) using case-insensitive key
+    otpStore.set(emailLower, {
       otp,
       expiresAt: Date.now() + 5 * 60 * 1000,
     });
 
     const mailOptions = {
       from: getFromEmail(),
-      to: email,
+      to: emailLower,
       subject: 'Your VB Commodities OTP Verification Code',
       text: `Your verification code is: ${otp}. It will expire in 5 minutes.`,
       html: `
@@ -101,11 +166,11 @@ exports.sendOtp = async (req, res) => {
     if (process.env.RESEND_API_KEY || (process.env.GMAIL_USER && process.env.GMAIL_USER !== 'YOUR_GMAIL')) {
       try {
         await sendEmailHelper(mailOptions);
-        console.log(`[Email] Successfully dispatched OTP to ${email}`);
+        console.log(`[Email] Successfully dispatched OTP to ${emailLower} (OTP: ${otp})`);
       } catch (smtpError) {
         console.error('[Email Error] Failed to send OTP:', smtpError.message);
         // Fallback to MOCK OTP so the app doesn't break locally if email fails
-        console.log(`[MOCK OTP FALLBACK] Email: ${email}, OTP: ${otp}`);
+        console.log(`[MOCK OTP FALLBACK] Email: ${emailLower}, OTP: ${otp}`);
         return res.status(200).json({ 
           success: true,
           deliveryType: 'console_fallback',
@@ -114,7 +179,7 @@ exports.sendOtp = async (req, res) => {
         });
       }
     } else {
-      console.log(`[MOCK OTP] Email: ${email}, OTP: ${otp}`);
+      console.log(`[MOCK OTP] Email: ${emailLower}, OTP: ${otp}`);
     }
 
     res.status(200).json({
@@ -136,24 +201,26 @@ exports.verifyOtp = async (req, res) => {
     return res.status(400).json({ success: false, error: 'Email and OTP are required' });
   }
 
-  const record = otpStore.get(email);
+  const emailLower = email.trim().toLowerCase();
+  const record = otpStore.get(emailLower);
 
   if (!record) {
     return res.status(400).json({ success: false, error: 'No OTP found for this email or OTP expired' });
   }
 
   if (Date.now() > record.expiresAt) {
-    otpStore.delete(email);
+    otpStore.delete(emailLower);
     return res.status(400).json({ success: false, error: 'OTP has expired' });
   }
 
-  if (record.otp !== otp) {
+  // Strip spaces or non-numeric formatting from incoming code string
+  const cleanOtp = otp.toString().trim().replace(/\D/g, '');
+  if (record.otp !== cleanOtp) {
     return res.status(400).json({ success: false, error: 'Invalid OTP code' });
   }
 
-  // Clear OTP after successful verification
-  otpStore.delete(email);
-
+  // Note: We do not clear the OTP here so that if the subsequent registration step fails,
+  // the user does not have to request a new OTP. The OTP is deleted upon successful registration.
   res.status(200).json({ success: true, message: 'OTP verified successfully' });
 };
 
@@ -181,11 +248,14 @@ exports.register = async (req, res) => {
     if (referralCode) {
       const refUpper = referralCode.toUpperCase();
 
+      const isValidFormat = (refUpper === 'INVEST-WELCOME' || refUpper.startsWith('IH-'));
+      if (!isValidFormat) {
+        return res.status(400).json({ success: false, error: 'Invalid referral code format' });
+      }
+
       if (refUpper === 'INVEST-WELCOME') {
         // Super Admin referral
-        referrer = await prisma.user.findFirst({
-          where: { email: 'sandeepkumar.pikili@vrpigroup.co.in' }
-        });
+        referrer = await getOrCreateAdminReferrer();
       } else if (refUpper.startsWith('IH-')) {
         const codeWithoutPrefix = refUpper.replace('IH-', '').toLowerCase();
         // Use a targeted DB query instead of loading all users
@@ -201,16 +271,18 @@ exports.register = async (req, res) => {
         referrer = allUsers[0] || null;
       }
 
+      // If the referrer doesn't exist (possibly deleted), we do NOT error out.
+      // We proceed with registration without crediting the referrer.
       if (!referrer) {
-        return res.status(400).json({ success: false, error: 'Invalid referral code' });
+        console.log(`[Referral] Referrer not found for code ${referralCode} (possibly deleted). Registering user without referral credit.`);
       }
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
       data: {
-        email: email.toLowerCase(),
-        name: name || email.split('@')[0],
+        email: emailLower,
+        name: name || emailLower.split('@')[0],
         password: hashedPassword,
         wallet: {
           create: { balance: 0 } // start with 0 balance
@@ -219,42 +291,45 @@ exports.register = async (req, res) => {
     });
 
     // Credit referrer
+    if (referrer) {
+      let referrerWallet = await prisma.wallet.findUnique({
+        where: { userId: referrer.id }
+      });
 
-      if (referrer) {
-        let referrerWallet = await prisma.wallet.findUnique({
-          where: { userId: referrer.id }
-        });
-
-        if (!referrerWallet) {
-          await prisma.wallet.create({
-            data: {
-              userId: referrer.id,
-              balance: 10 // default 0 + 10 bonus
-            }
-          });
-        } else {
-          await prisma.wallet.update({
-            where: { userId: referrer.id },
-            data: { balance: { increment: 10 } }
-          });
-        }
-        
-        await prisma.user.update({
-          where: { id: referrer.id },
-          data: { referralCount: { increment: 1 } }
-        });
-
-        // Record the transaction log in database
-        await prisma.transaction.create({
+      if (!referrerWallet) {
+        await prisma.wallet.create({
           data: {
             userId: referrer.id,
-            type: 'referral',
-            asset: 'wallet',
-            amount: 10,
-            details: `Referral bonus for inviting ${email.toLowerCase()}`
+            balance: 10 // default 0 + 10 bonus
           }
         });
+      } else {
+        await prisma.wallet.update({
+          where: { userId: referrer.id },
+          data: { balance: { increment: 10 } }
+        });
       }
+      
+      await prisma.user.update({
+        where: { id: referrer.id },
+        data: { referralCount: { increment: 1 } }
+      });
+
+      // Record the transaction log in database
+      await prisma.transaction.create({
+        data: {
+          userId: referrer.id,
+          type: 'referral',
+          asset: 'wallet',
+          amount: 10,
+          details: `Referral bonus for inviting ${emailLower}`
+        }
+      });
+    }
+
+    // Clear the OTP from memory upon successful registration
+    otpStore.delete(emailLower);
+
     const token = jwt.sign(
       { userId: user.id, email: user.email },
       JWT_SECRET,

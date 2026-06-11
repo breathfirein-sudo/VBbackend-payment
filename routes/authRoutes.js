@@ -30,6 +30,7 @@ router.post('/validate', async (req, res) => {
       res.json({
         valid: true,
         referralCount: user.referralCount,
+        isUnlocked: user.isUnlocked || user.referralCount >= 1,
         walletBalance: user.wallet?.balance || 0,
         withdrawableBalance: withdrawableBalance,
         kycStatus: user.kycStatus || 'Pending',
@@ -63,6 +64,65 @@ router.post('/kyc/upload', async (req, res) => {
     
     res.json({ success: true });
   } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/kyc/delete', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+    
+    await prisma.user.update({
+      where: { email: email.toLowerCase() },
+      data: {
+        kycStatus: 'Pending',
+        kycDocument: null,
+        kycDocName: null,
+        kycDocType: null,
+        kycUploadedAt: null
+      }
+    });
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.post('/delete-account', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, error: 'Email is required' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email: email.toLowerCase() }
+    });
+
+    if (!user) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    // Delete all related records in a transaction to prevent orphan records
+    await prisma.$transaction([
+      prisma.$executeRawUnsafe('DELETE FROM trades WHERE user_email = $1', user.email),
+      prisma.$executeRawUnsafe('DELETE FROM contest_trades WHERE user_email = $1', user.email),
+      prisma.$executeRawUnsafe('DELETE FROM contest_participants WHERE email = $1', user.email),
+      prisma.payment.deleteMany({ where: { userId: user.id } }),
+      prisma.transaction.deleteMany({ where: { userId: user.id } }),
+      prisma.position.deleteMany({ where: { userId: user.id } }),
+      prisma.trade.deleteMany({ where: { userId: user.id } }),
+      prisma.wallet.deleteMany({ where: { userId: user.id } }),
+      prisma.user.delete({ where: { id: user.id } })
+    ]);
+
+    res.json({ success: true, message: 'Account permanently deleted' });
+  } catch (error) {
+    console.error('Error in /delete-account route:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
