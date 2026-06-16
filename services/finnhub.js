@@ -60,21 +60,32 @@ const getFinnhubCandles = async (symbol, interval, count = 100) => {
     
     if (result && result.quotes && result.quotes.length > 0) {
       const intervalSec = getIntervalSeconds(interval);
-      const candles = [];
+      const candlesMap = new Map();
       for (const quote of result.quotes) {
         if (quote.open !== null && quote.close !== null) {
           const rawTime = Math.floor(quote.date.getTime() / 1000);
           const roundedTime = Math.floor(rawTime / intervalSec) * intervalSec;
-          candles.push({
-            time: roundedTime,
-            open: quote.open,
-            high: quote.high,
-            low: quote.low,
-            close: quote.close,
-            value: quote.volume || 0
-          });
+          
+          if (candlesMap.has(roundedTime)) {
+            const existing = candlesMap.get(roundedTime);
+            existing.high = Math.max(existing.high, quote.high);
+            existing.low = Math.min(existing.low, quote.low);
+            existing.close = quote.close;
+            existing.value += (quote.volume || 0);
+          } else {
+            candlesMap.set(roundedTime, {
+              time: roundedTime,
+              open: quote.open,
+              high: quote.high,
+              low: quote.low,
+              close: quote.close,
+              value: quote.volume || 0
+            });
+          }
         }
       }
+      
+      const candles = Array.from(candlesMap.values()).sort((a, b) => a.time - b.time);
       
       // Return only the requested count to avoid overflowing the chart
       return candles.slice(-count);
