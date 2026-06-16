@@ -133,7 +133,7 @@ exports.placeTrade = async (req, res) => {
     // 2. Calculate quantity and expiry time
     const quantity = amt / parseFloat(price);
     const ms = getExpiryMs(interval);
-    const expiryTime = new Date(Date.now() + ms);
+    const expiryTime = new Date(Date.now() + ms).toISOString();
 
     // 3. Deduct balance in transaction
     await db.query('BEGIN');

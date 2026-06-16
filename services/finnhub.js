@@ -19,6 +19,16 @@ const getIntervalString = (frontendInterval) => {
   return '1m';
 };
 
+const getIntervalSeconds = (intv) => {
+  if (!intv) return 60;
+  if (intv.includes('m')) return parseInt(intv) * 60;
+  if (intv.includes('h')) return parseInt(intv) * 3600;
+  if (intv.includes('D') || intv.includes('d')) return 86400;
+  if (intv.includes('W') || intv.includes('w')) return 7 * 86400;
+  if (intv.includes('M') || intv.includes('mo')) return 30 * 86400;
+  return 60;
+};
+
 const getFinnhubCandles = async (symbol, interval, count = 100) => {
   try {
     let yahooSymbol = symbol;
@@ -39,21 +49,24 @@ const getFinnhubCandles = async (symbol, interval, count = 100) => {
     else if (period === '1wk') lookbackDays = count * 10;
     else if (period === '1mo') lookbackDays = count * 40;
     else if (period.includes('h')) lookbackDays = count / 2; // e.g. 200 hours -> 100 days
-
+ 
     // Ensure we don't exceed Yahoo's 7-day limit for 1m intervals
     if (period === '1m') lookbackDays = 7;
-
+ 
     const from = new Date(to.getTime() - (lookbackDays * 86400 * 1000)); 
-
+ 
     const queryOptions = { period1: from, period2: to, interval: period };
     const result = await yahooFinance.chart(yahooSymbol, queryOptions);
     
     if (result && result.quotes && result.quotes.length > 0) {
+      const intervalSec = getIntervalSeconds(interval);
       const candles = [];
       for (const quote of result.quotes) {
         if (quote.open !== null && quote.close !== null) {
+          const rawTime = Math.floor(quote.date.getTime() / 1000);
+          const roundedTime = Math.floor(rawTime / intervalSec) * intervalSec;
           candles.push({
-            time: Math.floor(quote.date.getTime() / 1000), // lightweight-charts uses unix timestamp in seconds
+            time: roundedTime,
             open: quote.open,
             high: quote.high,
             low: quote.low,

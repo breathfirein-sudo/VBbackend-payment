@@ -15,10 +15,15 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 const buyTrade = async (req, res) => {
-  const { symbol, price, quantity, interval } = req.body;
+  const { symbol, price, investmentAmount, interval } = req.body;
   const email = req.user.email.toLowerCase();
+  
+  const amt = parseFloat(investmentAmount);
+  if (isNaN(amt) || amt !== 100) {
+    return res.status(400).json({ error: 'Investment amount is fixed at ₹100.' });
+  }
+
   try {
-    // Check user's withdrawable balance first
     const user = await prisma.user.findUnique({
       where: { email },
       include: { wallet: true }
@@ -28,23 +33,50 @@ const buyTrade = async (req, res) => {
       return res.status(400).json({ error: 'User wallet not found' });
     }
 
-    const totalReferralRewards = (user.referralCount || 0) * 10;
-    const withdrawableBalance = Math.max(0, user.wallet.balance - totalReferralRewards);
-
-    if (withdrawableBalance < 100) {
+    if (user.wallet.balance < amt) {
       return res.status(400).json({
-        error: `Insufficient withdrawable balance. You cannot trade with referral rewards. You need at least ₹100.00 but only have ₹${withdrawableBalance.toFixed(2)}.`
+        error: `Insufficient wallet balance. Placing a trade requires ₹${amt.toFixed(2)} but you only have ₹${user.wallet.balance.toFixed(2)}.`
       });
     }
 
     const ms = getExpiryMs(interval);
-    const expiryTime = new Date(Date.now() + ms);
+    const expiryTime = new Date(Date.now() + ms).toISOString();
+    const tradeStake = amt * 0.10;
+    const appFee = amt * 0.01;
+    const qty = tradeStake / parseFloat(price);
+    const balanceBefore = parseFloat(user.wallet.balance);
 
-    const result = await db.query(
-      'INSERT INTO trades (symbol, price, quantity, type, status, expiry_time, user_email) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [symbol, price, quantity, 'BUY', 'OPEN', expiryTime, email]
-    );
-    res.status(201).json(result.rows[0]);
+    await db.query('BEGIN');
+    try {
+      // 1. Deduct exactly investmentAmount from user's Wallet balance
+      await db.query(
+        'UPDATE "Wallet" SET balance = balance - $1 WHERE "userId" = $2',
+        [amt, user.id]
+      );
+
+      // 2. Insert standard trade with details including wallet_balance_before
+      const result = await db.query(
+        `INSERT INTO trades (
+          symbol, price, quantity, type, status, expiry_time, user_email, 
+          investment_amount, pnl, trade_stake, application_fee, returned_amount, profit_loss_amount, user_id,
+          wallet_balance_before, wallet_balance_after
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0.00, $9, $10, 0.00, 0.00, $11, $12, 0.00) RETURNING *`,
+        [symbol, price, qty, 'BUY', 'OPEN', expiryTime, email, amt, tradeStake, appFee, user.id, balanceBefore]
+      );
+
+      // 3. Record wallet transaction log
+      await db.query(
+        `INSERT INTO "Transaction" ("userId", "type", "asset", "amount", "fee", "gst", "details", "createdAt") 
+         VALUES ($1, $2, $3, $4, $5, 0.00, $6, CURRENT_TIMESTAMP)`,
+        [user.id, 'TRADE_PLACE', symbol, -amt, appFee, `Standard Paper Trade BUY placement of ${symbol}`]
+      );
+
+      await db.query('COMMIT');
+      res.status(201).json(result.rows[0]);
+    } catch (txErr) {
+      await db.query('ROLLBACK');
+      throw txErr;
+    }
   } catch (error) {
     console.error('Error executing buy trade:', error);
     res.status(500).json({ error: 'Failed to execute buy trade' });
@@ -52,10 +84,15 @@ const buyTrade = async (req, res) => {
 };
 
 const sellTrade = async (req, res) => {
-  const { symbol, price, quantity, interval } = req.body;
+  const { symbol, price, investmentAmount, interval } = req.body;
   const email = req.user.email.toLowerCase();
+  
+  const amt = parseFloat(investmentAmount);
+  if (isNaN(amt) || amt !== 100) {
+    return res.status(400).json({ error: 'Investment amount is fixed at ₹100.' });
+  }
+
   try {
-    // Check user's withdrawable balance first
     const user = await prisma.user.findUnique({
       where: { email },
       include: { wallet: true }
@@ -65,23 +102,50 @@ const sellTrade = async (req, res) => {
       return res.status(400).json({ error: 'User wallet not found' });
     }
 
-    const totalReferralRewards = (user.referralCount || 0) * 10;
-    const withdrawableBalance = Math.max(0, user.wallet.balance - totalReferralRewards);
-
-    if (withdrawableBalance < 100) {
+    if (user.wallet.balance < amt) {
       return res.status(400).json({
-        error: `Insufficient withdrawable balance. You cannot trade with referral rewards. You need at least ₹100.00 but only have ₹${withdrawableBalance.toFixed(2)}.`
+        error: `Insufficient wallet balance. Placing a trade requires ₹${amt.toFixed(2)} but you only have ₹${user.wallet.balance.toFixed(2)}.`
       });
     }
 
     const ms = getExpiryMs(interval);
-    const expiryTime = new Date(Date.now() + ms);
+    const expiryTime = new Date(Date.now() + ms).toISOString();
+    const tradeStake = amt * 0.10;
+    const appFee = amt * 0.01;
+    const qty = tradeStake / parseFloat(price);
+    const balanceBefore = parseFloat(user.wallet.balance);
 
-    const result = await db.query(
-      'INSERT INTO trades (symbol, price, quantity, type, status, expiry_time, user_email) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [symbol, price, quantity, 'SELL', 'OPEN', expiryTime, email]
-    );
-    res.status(201).json(result.rows[0]);
+    await db.query('BEGIN');
+    try {
+      // 1. Deduct exactly investmentAmount from user's Wallet balance
+      await db.query(
+        'UPDATE "Wallet" SET balance = balance - $1 WHERE "userId" = $2',
+        [amt, user.id]
+      );
+
+      // 2. Insert standard trade with details including wallet_balance_before
+      const result = await db.query(
+        `INSERT INTO trades (
+          symbol, price, quantity, type, status, expiry_time, user_email, 
+          investment_amount, pnl, trade_stake, application_fee, returned_amount, profit_loss_amount, user_id,
+          wallet_balance_before, wallet_balance_after
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0.00, $9, $10, 0.00, 0.00, $11, $12, 0.00) RETURNING *`,
+        [symbol, price, qty, 'SELL', 'OPEN', expiryTime, email, amt, tradeStake, appFee, user.id, balanceBefore]
+      );
+
+      // 3. Record wallet transaction log
+      await db.query(
+        `INSERT INTO "Transaction" ("userId", "type", "asset", "amount", "fee", "gst", "details", "createdAt") 
+         VALUES ($1, $2, $3, $4, $5, 0.00, $6, CURRENT_TIMESTAMP)`,
+        [user.id, 'TRADE_PLACE', symbol, -amt, appFee, `Standard Paper Trade SELL placement of ${symbol}`]
+      );
+
+      await db.query('COMMIT');
+      res.status(201).json(result.rows[0]);
+    } catch (txErr) {
+      await db.query('ROLLBACK');
+      throw txErr;
+    }
   } catch (error) {
     console.error('Error executing sell trade:', error);
     res.status(500).json({ error: 'Failed to execute sell trade' });

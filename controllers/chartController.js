@@ -1,4 +1,5 @@
 const { getFinnhubCandles } = require('../services/finnhub');
+const { getOrStartTracker } = require('../services/livePriceTracker');
 
 const getChartData = async (req, res) => {
   try {
@@ -12,11 +13,10 @@ const getChartData = async (req, res) => {
 
 const getLiveCandle = async (req, res) => {
   try {
-    // This will typically be served via socket.io, but the user requested this route
     const { symbol } = req.params;
-    const candles = await getFinnhubCandles(symbol, '1m', 1);
-    if (candles.length > 0) {
-      res.json(candles[candles.length - 1]);
+    const tracker = await getOrStartTracker(symbol, '1m');
+    if (tracker && tracker.lastCandle) {
+      res.json(tracker.lastCandle);
     } else {
       res.status(404).json({ error: 'No live candle found' });
     }

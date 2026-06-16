@@ -1,4 +1,5 @@
 const { getFinnhubCandles } = require('../services/finnhub');
+const { getOrStartTracker, getCurrentPrice } = require('../services/livePriceTracker');
 const db = require('../db');
 const { PrismaClient } = require('@prisma/client');
 const globalPrisma = new PrismaClient();
@@ -25,11 +26,12 @@ const setupSocket = (io) => {
       );
 
       for (let trade of expiredTrades) {
+        const investment = parseFloat(trade.investment_amount || 0);
+
         // Fetch current price for resolution
-        const candles = await getFinnhubCandles(trade.symbol, '1m', 1);
-        if (candles && candles.length > 0) {
-          const currentPrice = candles[candles.length - 1].close;
-          let newStatus = 'TIE';
+        const currentPrice = await getCurrentPrice(trade.symbol, '1m');
+        if (currentPrice !== null && currentPrice !== undefined) {
+          let newStatus = 'REJECTED';
           
           if (trade.type === 'BUY') {
             if (currentPrice > trade.price) newStatus = 'WON';
@@ -39,21 +41,178 @@ const setupSocket = (io) => {
             else if (currentPrice > trade.price) newStatus = 'LOST';
           }
 
-          await db.query(
-            "UPDATE trades SET status = $1, close_price = $2 WHERE id = $3",
-            [newStatus, currentPrice, trade.id]
-          );
+          // Calculate returnedAmount, profitLossAmount, and walletRefund using settlement formula
+          const tradeStake = parseFloat(trade.trade_stake || 10.00);
+          const appFee = parseFloat(trade.application_fee || 1.00);
+          
+          let returnedAmount = 0.00; // default REJECTED (money will not be refunded)
+          let profitLossAmount = 0.00; 
+          let netPnl = -investment; // loses full investment
+          
+          if (newStatus === 'WON') {
+            returnedAmount = investment + (tradeStake - appFee); // ₹109 for ₹100
+            profitLossAmount = tradeStake - appFee; // ₹9 (paper trade profit)
+            netPnl = tradeStake - appFee; // +₹9 net wallet change
+          } else if (newStatus === 'LOST') {
+            returnedAmount = investment - (tradeStake + appFee); // ₹89 for ₹100
+            profitLossAmount = -tradeStake; // -₹10 (paper trade loss)
+            netPnl = -(tradeStake + appFee); // -₹11 net wallet change
+          } else if (newStatus === 'TIE') {
+            returnedAmount = investment - appFee; // ₹99
+            profitLossAmount = 0.00;
+            netPnl = -appFee;
+          }
+          
+          const walletRefund = returnedAmount;
 
-          // Broadcast to all clients
-          io.emit('trade_resolved', { ...trade, status: newStatus, close_price: currentPrice });
+          await db.query('BEGIN');
+          try {
+            const userRes = await db.query(
+              'SELECT id FROM "User" WHERE email = $1',
+              [trade.user_email.toLowerCase()]
+            );
+            
+            let balanceAfter = 0.00;
+            if (userRes.rows.length > 0) {
+              const userId = userRes.rows[0].id;
+              const walletRes = await db.query(
+                'SELECT balance FROM "Wallet" WHERE "userId" = $1',
+                [userId]
+              );
+              const currentBalance = parseFloat(walletRes.rows[0].balance || 0);
+              balanceAfter = currentBalance + walletRefund;
+
+              // Update user wallet balance
+              await db.query(
+                'UPDATE "Wallet" SET balance = balance + $1 WHERE "userId" = $2',
+                [walletRefund, userId]
+              );
+
+              // Update trade record with closed price, pnl, returned_amount, profit_loss_amount, wallet_balance_after
+              await db.query(
+                `UPDATE trades 
+                 SET status = $1, 
+                     close_price = $2, 
+                     pnl = $3, 
+                     returned_amount = $4, 
+                     profit_loss_amount = $5,
+                     wallet_balance_after = $6
+                 WHERE id = $7`,
+                [newStatus, currentPrice, netPnl, returnedAmount, profitLossAmount, balanceAfter, trade.id]
+              );
+
+              // Record settlement transaction audit log
+              await db.query(
+                `INSERT INTO "Transaction" ("userId", "type", "asset", "amount", "fee", "gst", "details", "createdAt") 
+                 VALUES ($1, $2, $3, $4, $5, 0.00, $6, CURRENT_TIMESTAMP)`,
+                [userId, 'TRADE_SETTLE', trade.symbol, walletRefund, appFee, `Standard Paper Trade settlement credit: ${newStatus}`]
+              );
+            } else {
+              // Fallback update without user id (should not normally happen)
+              await db.query(
+                `UPDATE trades 
+                 SET status = $1, 
+                     close_price = $2, 
+                     pnl = $3, 
+                     returned_amount = $4, 
+                     profit_loss_amount = $5
+                 WHERE id = $6`,
+                [newStatus, currentPrice, netPnl, returnedAmount, profitLossAmount, trade.id]
+              );
+            }
+            await db.query('COMMIT');
+
+            // Broadcast to all clients
+            io.emit('trade_resolved', { 
+              ...trade, 
+              status: newStatus, 
+              close_price: currentPrice, 
+              pnl: netPnl, 
+              returned_amount: returnedAmount,
+              profit_loss_amount: profitLossAmount,
+              wallet_balance_after: balanceAfter,
+              balance_refund: walletRefund 
+            });
+          } catch (txErr) {
+            await db.query('ROLLBACK');
+            console.error('Error resolving standard trade:', txErr.message);
+          }
         } else {
-          // If candles are empty, Yahoo Finance failed or symbol is delisted.
-          // Resolve as TIE to prevent infinite loop spamming the server
-          await db.query(
-            "UPDATE trades SET status = 'TIE', close_price = price WHERE id = $1",
-            [trade.id]
-          );
-          io.emit('trade_resolved', { ...trade, status: 'TIE', close_price: trade.price });
+          // If candles are empty or failed, resolve as REJECTED to prevent infinite loop
+          await db.query('BEGIN');
+          try {
+            const tradeStake = parseFloat(trade.trade_stake || 10.00);
+            const appFee = parseFloat(trade.application_fee || 1.00);
+            const returnedAmount = investment;
+            const profitLossAmount = 0.00;
+            const netPnl = 0.00;
+            const walletRefund = returnedAmount;
+
+            const userRes = await db.query(
+              'SELECT id FROM "User" WHERE email = $1',
+              [trade.user_email.toLowerCase()]
+            );
+            
+            let balanceAfter = 0.00;
+            if (userRes.rows.length > 0) {
+              const userId = userRes.rows[0].id;
+              const walletRes = await db.query(
+                'SELECT balance FROM "Wallet" WHERE "userId" = $1',
+                [userId]
+              );
+              const currentBalance = parseFloat(walletRes.rows[0].balance || 0);
+              balanceAfter = currentBalance + walletRefund;
+
+              await db.query(
+                'UPDATE "Wallet" SET balance = balance + $1 WHERE "userId" = $2',
+                [walletRefund, userId]
+              );
+
+              await db.query(
+                `UPDATE trades 
+                 SET status = 'REJECTED', 
+                     close_price = price, 
+                     pnl = $1, 
+                     returned_amount = $2, 
+                     profit_loss_amount = $3,
+                     wallet_balance_after = $4
+                 WHERE id = $5`,
+                [netPnl, returnedAmount, profitLossAmount, balanceAfter, trade.id]
+              );
+
+              await db.query(
+                `INSERT INTO "Transaction" ("userId", "type", "asset", "amount", "fee", "gst", "details", "createdAt") 
+                 VALUES ($1, $2, $3, $4, $5, 0.00, $6, CURRENT_TIMESTAMP)`,
+                [userId, 'TRADE_SETTLE', trade.symbol, walletRefund, appFee, `Standard Paper Trade settlement credit (Fallback Rejected)`]
+              );
+            } else {
+              await db.query(
+                `UPDATE trades 
+                 SET status = 'REJECTED', 
+                     close_price = price, 
+                     pnl = $1, 
+                     returned_amount = $2, 
+                     profit_loss_amount = $3
+                 WHERE id = $4`,
+                [netPnl, returnedAmount, profitLossAmount, trade.id]
+              );
+            }
+            await db.query('COMMIT');
+            
+            io.emit('trade_resolved', { 
+              ...trade, 
+              status: 'REJECTED', 
+              close_price: trade.price, 
+              pnl: netPnl, 
+              returned_amount: returnedAmount,
+              profit_loss_amount: profitLossAmount,
+              wallet_balance_after: balanceAfter,
+              balance_refund: walletRefund 
+            });
+          } catch (txErr) {
+            await db.query('ROLLBACK');
+            console.error('Error resolving failed standard trade:', txErr.message);
+          }
         }
       }
 
@@ -63,9 +222,8 @@ const setupSocket = (io) => {
       );
 
       for (let trade of expiredContestTrades) {
-        const candles = await getFinnhubCandles(trade.symbol, '1m', 1);
-        if (candles && candles.length > 0) {
-          const currentPrice = candles[candles.length - 1].close;
+        const currentPrice = await getCurrentPrice(trade.symbol, '1m');
+        if (currentPrice !== null && currentPrice !== undefined) {
           let newStatus = 'TIE';
           let pnl = 0;
           const entryAmount = parseFloat(trade.entry_amount);
@@ -196,9 +354,9 @@ const setupSocket = (io) => {
 
       const fetchAndEmit = async () => {
         try {
-          const candles = await getFinnhubCandles(activeSymbol, activeInterval, 1);
-          if (candles && candles.length > 0) {
-            socket.emit('live_candle', candles[candles.length - 1]);
+          const tracker = await getOrStartTracker(activeSymbol, activeInterval);
+          if (tracker && tracker.lastCandle) {
+            socket.emit('live_candle', tracker.lastCandle);
           }
         } catch (error) {
           console.error('Socket polling error:', error.message);
@@ -208,9 +366,8 @@ const setupSocket = (io) => {
       // Fetch immediately
       await fetchAndEmit();
 
-      // Always poll every 5 seconds for live price tracking regardless of chart interval.
-      // The chart interval controls candle *grouping*, not how often we push the latest tick.
-      const freq = 5000;
+      // Poll every 1 second (1000ms) for real-time smooth price action tracking
+      const freq = 1000;
       console.log(`Starting live updates for ${activeSymbol} every ${freq}ms (chart interval: ${activeInterval})`);
       currentTimer = setInterval(fetchAndEmit, freq);
     };
