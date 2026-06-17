@@ -33,9 +33,34 @@ exports.createOrder = async (req, res) => {
       if (amount < 500) {
         return res.status(400).json({ success: false, error: 'Withdrawal amount must be at least ₹500' });
       }
-      if (!payoutDetails || (!payoutDetails.upiId && (!payoutDetails.accountNumber || !payoutDetails.ifsc))) {
-        return res.status(400).json({ success: false, error: 'UPI ID or Bank Account Details are required for withdrawal' });
+      if (!payoutDetails || !payoutDetails.accountNumber || !payoutDetails.ifsc) {
+        return res.status(400).json({ success: false, error: 'Bank Account Details are required for withdrawal' });
       }
+
+      // Check if user already has locked bank details (any past successful or processing bank withdrawal)
+      const lastWithdrawal = await prisma.payment.findFirst({
+        where: {
+          userId: user.id,
+          paymentMethod: { in: ['bank_withdrawal', 'bank_withdrawal_sim'] },
+          status: { in: ['processing', 'successful'] }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
+      if (lastWithdrawal) {
+        console.log(`[PAYMENT] Enforcing locked bank details for user ${user.email} (Account: ${lastWithdrawal.bankAccount})`);
+        payoutDetails.accountNumber = lastWithdrawal.bankAccount;
+        payoutDetails.ifsc = lastWithdrawal.ifsc;
+        payoutDetails.bankName = lastWithdrawal.bankName;
+        payoutDetails.accountName = lastWithdrawal.accountHolder;
+      }
+
+      // Validate payout mode (IMPS, RTGS, NEFT)
+      const allowedModes = ['IMPS', 'RTGS', 'NEFT'];
+      const payoutMode = (payoutDetails && payoutDetails.mode && allowedModes.includes(payoutDetails.mode.toUpperCase()))
+        ? payoutDetails.mode.toUpperCase()
+        : 'IMPS';
+
 
       if (!user.wallet) {
         return res.status(400).json({ success: false, error: 'Wallet not found' });
@@ -76,18 +101,13 @@ exports.createOrder = async (req, res) => {
         // 2. Create a Fund Account
         const fundAccountBody = {
           contact_id: contactId,
-          account_type: payoutDetails.upiId ? 'vpa' : 'bank_account'
-        };
-
-        if (payoutDetails.upiId) {
-          fundAccountBody.vpa = { address: payoutDetails.upiId };
-        } else {
-          fundAccountBody.bank_account = {
+          account_type: 'bank_account',
+          bank_account: {
             name: payoutDetails.accountName || user.name || user.email.split('@')[0],
             ifsc: payoutDetails.ifsc,
             account_number: payoutDetails.accountNumber
-          };
-        }
+          }
+        };
 
         console.log('Sending Razorpay Fund Account creation request...');
         const fundAccountRes = await axios.post(
@@ -105,7 +125,7 @@ exports.createOrder = async (req, res) => {
           fund_account_id: fundAccountId,
           amount: amount * 100, // Amount in paise
           currency: 'INR',
-          mode: payoutDetails.upiId ? 'UPI' : 'IMPS',
+          mode: payoutMode,
           purpose: 'payout',
           queue_if_low_balance: true,
           reference_id: `wd_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
@@ -140,8 +160,8 @@ exports.createOrder = async (req, res) => {
               amount: amount,
               currency: currency,
               status: payoutData.status || 'processing',
-              paymentMethod: payoutDetails.upiId ? 'upi_withdrawal' : 'bank_withdrawal',
-              upiId: payoutDetails.upiId || null,
+              paymentMethod: 'bank_withdrawal',
+              upiId: payoutMode,
               bankAccount: payoutDetails.accountNumber || null,
               ifsc: payoutDetails.ifsc || null,
               bankName: payoutDetails.bankName || null,
@@ -155,7 +175,7 @@ exports.createOrder = async (req, res) => {
               type: 'withdrawal',
               asset: 'wallet',
               amount: amount,
-              details: `Withdrew to ${payoutDetails.upiId || payoutDetails.accountNumber} (Payout ID: ${payoutData.id})`
+              details: `Withdrew via ${payoutMode} to ${payoutDetails.accountNumber} (Payout ID: ${payoutData.id})`
             }
           })
         ]);
@@ -196,8 +216,8 @@ exports.createOrder = async (req, res) => {
                 amount: amount,
                 currency: currency,
                 status: 'processing',
-                paymentMethod: payoutDetails.upiId ? 'upi_withdrawal_sim' : 'bank_withdrawal_sim',
-                upiId: payoutDetails.upiId || null,
+                paymentMethod: 'bank_withdrawal_sim',
+                upiId: payoutMode,
                 bankAccount: payoutDetails.accountNumber || null,
                 ifsc: payoutDetails.ifsc || null,
                 bankName: payoutDetails.bankName || null,
@@ -211,7 +231,7 @@ exports.createOrder = async (req, res) => {
                 type: 'withdrawal',
                 asset: 'wallet',
                 amount: amount,
-                details: `Simulated withdrawal to ${payoutDetails.upiId || payoutDetails.accountNumber} (Payout ID: ${simulatedPayoutId})`
+                details: `Simulated withdrawal (${payoutMode}) to ${payoutDetails.accountNumber} (Payout ID: ${simulatedPayoutId})`
               }
             })
           ]);

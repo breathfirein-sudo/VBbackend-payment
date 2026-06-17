@@ -27,6 +27,17 @@ router.post('/validate', async (req, res) => {
     if (user) {
       const totalReferralRewards = (user.referralCount || 0) * 10;
       const withdrawableBalance = Math.max(0, (user.wallet?.balance || 0) - totalReferralRewards);
+
+      // Find last successful or processing bank withdrawal
+      const lastWithdrawal = await prisma.payment.findFirst({
+        where: {
+          userId: user.id,
+          paymentMethod: { in: ['bank_withdrawal', 'bank_withdrawal_sim'] },
+          status: { in: ['processing', 'successful'] }
+        },
+        orderBy: { createdAt: 'desc' }
+      });
+
       res.json({
         valid: true,
         referralCount: user.referralCount,
@@ -34,7 +45,13 @@ router.post('/validate', async (req, res) => {
         walletBalance: user.wallet?.balance || 0,
         withdrawableBalance: withdrawableBalance,
         kycStatus: user.kycStatus || 'Pending',
-        transactions: user.transactions || []
+        transactions: user.transactions || [],
+        lockedBankDetails: lastWithdrawal ? {
+          accountHolder: lastWithdrawal.accountHolder,
+          bankName: lastWithdrawal.bankName,
+          bankAccount: lastWithdrawal.bankAccount,
+          ifsc: lastWithdrawal.ifsc
+        } : null
       });
     } else {
       res.json({ valid: false });
