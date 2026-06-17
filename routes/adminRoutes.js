@@ -2,6 +2,9 @@ const express = require('express');
 const router = express.Router();
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const { sendEmailHelper, getFromEmail } = require('../controllers/authController');
 
 router.post('/delete-user', async (req, res) => {
   const { email } = req.body;
@@ -122,7 +125,7 @@ router.get('/users/sync', async (req, res) => {
         id: 'CUST-' + user.id,
         name: user.name || user.email.split('@')[0],
         email: user.email,
-        phone: '',
+        phone: user.phone || '',
         walletBalance: user.wallet?.balance || 0,
         holdings: { gold: 0, silver: 0, platinum: 0, iron: 0 },
         kycStatus: user.kycStatus || 'Pending',
@@ -160,6 +163,7 @@ router.get('/withdrawals', async (req, res) => {
             id: true,
             email: true,
             name: true,
+            phone: true,
             wallet: true
           }
         }
@@ -337,5 +341,120 @@ router.get('/my-withdrawals', async (req, res) => {
   }
 });
 
+// GET /api/admin/support-executives - Fetch all support executives
+router.get('/support-executives', async (req, res) => {
+  try {
+    const executives = await prisma.supportExecutive.findMany({
+      orderBy: { createdAt: 'desc' }
+    });
+    res.json({ success: true, executives });
+  } catch (error) {
+    console.error('Error fetching support executives:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch support executives', error: error.message });
+  }
+});
+
+// POST /api/admin/support-executives - Create a support executive
+router.post('/support-executives', async (req, res) => {
+  const { name, phone, email, role, salary, status, shift, languages, rating, experienceYrs } = req.body;
+  if (!name || !role || salary === undefined) {
+    return res.status(400).json({ success: false, message: 'Name, role, and salary are required' });
+  }
+
+  try {
+    // Generate temporary password (8 characters)
+    const tempPassword = crypto.randomBytes(4).toString('hex');
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+    const executive = await prisma.supportExecutive.create({
+      data: {
+        name,
+        phone: phone || null,
+        email: email || null,
+        password: hashedPassword,
+        attendance: '[]',
+        role,
+        salary: parseFloat(salary),
+        status: status || 'Active',
+        shift: shift || 'Day',
+        languages: languages || 'English, Hindi',
+        rating: rating !== undefined ? parseFloat(rating) : 5.0,
+        experienceYrs: experienceYrs !== undefined ? parseInt(experienceYrs) : 0
+      }
+    });
+
+    // Send onboarding email notification to the executive
+    if (email) {
+      try {
+        await sendEmailHelper({
+          from: getFromEmail(),
+          to: email,
+          subject: 'Welcome to Investhour Support Team - Onboarding Details',
+          text: `Hello ${name},\n\nYou have been registered as a Support Executive at Investhour.\n\nHere are your login credentials:\nEmail: ${email}\nTemporary Password: ${tempPassword}\n\nPlease log in and update your password.\n\nBest regards,\nInvesthour Admin Team`,
+          html: `<p>Hello <strong>${name}</strong>,</p>
+                 <p>You have been registered as a Support Executive at Investhour.</p>
+                 <p><strong>Login Credentials:</strong><br/>
+                 Email: <code>${email}</code><br/>
+                 Temporary Password: <code>${tempPassword}</code></p>
+                 <p>Please log in and update your password.</p>
+                 <p>Best regards,<br/>Investhour Admin Team</p>`
+        });
+        console.log(`[Onboarding] Onboarding credentials email dispatched to ${email}`);
+      } catch (mailErr) {
+        console.error('[Onboarding] Failed to dispatch onboarding email:', mailErr.message);
+      }
+    }
+
+    res.json({ success: true, executive, tempPassword });
+  } catch (error) {
+    console.error('Error creating support executive:', error);
+    res.status(500).json({ success: false, message: 'Failed to create support executive', error: error.message });
+  }
+});
+
+// PUT /api/admin/support-executives/:id - Update support executive
+router.put('/support-executives/:id', async (req, res) => {
+  const { id } = req.params;
+  const { name, phone, email, role, salary, status, shift, languages, rating, experienceYrs } = req.body;
+
+  try {
+    const executive = await prisma.supportExecutive.update({
+      where: { id: parseInt(id) },
+      data: {
+        name,
+        phone,
+        email,
+        role,
+        salary: salary !== undefined ? parseFloat(salary) : undefined,
+        status,
+        shift,
+        languages,
+        rating: rating !== undefined ? parseFloat(rating) : undefined,
+        experienceYrs: experienceYrs !== undefined ? parseInt(experienceYrs) : undefined
+      }
+    });
+    res.json({ success: true, executive });
+  } catch (error) {
+    console.error('Error updating support executive:', error);
+    res.status(500).json({ success: false, message: 'Failed to update support executive', error: error.message });
+  }
+});
+
+// DELETE /api/admin/support-executives/:id - Delete support executive
+router.delete('/support-executives/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await prisma.supportExecutive.delete({
+      where: { id: parseInt(id) }
+    });
+    res.json({ success: true, message: 'Support executive deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting support executive:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete support executive', error: error.message });
+  }
+});
+
 module.exports = router;
+
 

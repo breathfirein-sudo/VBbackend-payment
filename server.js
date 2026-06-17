@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
+const path = require('path');
 
 const chartRoutes = require('./routes/chartRoutes');
 const tradeRoutes = require('./routes/tradeRoutes');
@@ -34,6 +35,9 @@ app.use('/api/auth', require('./routes/authRoutes'));
 app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/contest', require('./routes/contestRoutes'));
 app.use('/api/admin', require('./routes/adminRoutes'));
+app.use('/api', require('./routes/supportRoutes'));
+app.use('/api/deposits', require('./routes/depositRoutes'));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 app.use('/', require('./routes/dbViewerRoutes'));
 
 // Setup Socket.io
