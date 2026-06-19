@@ -223,9 +223,8 @@ exports.verifyOtp = async (req, res) => {
   // the user does not have to request a new OTP. The OTP is deleted upon successful registration.
   res.status(200).json({ success: true, message: 'OTP verified successfully' });
 };
-
 exports.register = async (req, res) => {
-  const { email, password, name, referralCode, defaultReferralCode } = req.body;
+  const { email, password, name, phone, referralCode, defaultReferralCode } = req.body;
   if (!email || !password) {
     return res.status(400).json({ success: false, error: 'Email and password are required' });
   }
@@ -283,6 +282,7 @@ exports.register = async (req, res) => {
       data: {
         email: emailLower,
         name: name || emailLower.split('@')[0],
+        phone: phone || null,
         password: hashedPassword,
         wallet: {
           create: { balance: 0 } // start with 0 balance
@@ -342,7 +342,8 @@ exports.register = async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        name: user.name
+        name: user.name,
+        phone: user.phone
       }
     });
   } catch (error) {
@@ -393,7 +394,8 @@ exports.login = async (req, res) => {
       user: {
         id: user.id,
         email: user.email,
-        name: user.name
+        name: user.name,
+        phone: user.phone
       }
     });
   } catch (error) {
@@ -515,4 +517,8 @@ exports.resetPassword = async (req, res) => {
     res.status(500).json({ success: false, error: 'Failed to reset password: ' + error.message });
   }
 };
+
+exports.sendEmailHelper = sendEmailHelper;
+exports.getFromEmail = getFromEmail;
+
 
