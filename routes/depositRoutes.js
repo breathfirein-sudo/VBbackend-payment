@@ -112,6 +112,20 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
       }
     });
 
+    // Automatically post the manual deposit to the user's support chat
+    try {
+      await prisma.supportMessage.create({
+        data: {
+          sender: 'user',
+          userEmail: req.user.email.toLowerCase(),
+          text: `Manual Deposit Submitted: ₹${amount} via ${paymentMethod || 'UPI'}. UTR: ${utrNumber}`,
+          mediaUrl: screenshotUrl
+        }
+      });
+    } catch (chatErr) {
+      console.error('Failed to auto-create support message for deposit:', chatErr);
+    }
+
     res.json({ success: true, deposit });
   } catch (error) {
     console.error('Manual deposit submit error:', error);
@@ -280,32 +294,86 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
           data: { status: 'Approved', execId: req.executive.id }
         });
 
-        const wallet = await tx.wallet.findUnique({ where: { userId: deposit.userId } });
-        if (wallet) {
-          await tx.wallet.update({
-            where: { userId: deposit.userId },
-            data: { balance: { increment: deposit.amount } }
+        const user = await tx.user.findUnique({ where: { id: deposit.userId } });
+
+        if (deposit.amount === 10) {
+          // Treat as vault unlock fee
+          if (user) {
+            await tx.user.update({
+              where: { id: deposit.userId },
+              data: { isUnlocked: true }
+            });
+          }
+          await tx.transaction.create({
+            data: {
+              userId: deposit.userId,
+              type: 'unlock_fee',
+              asset: 'wallet',
+              amount: deposit.amount,
+              details: `Account unlocked via manual fee payment (UTR: ${deposit.utrNumber})`
+            }
           });
         } else {
-          await tx.wallet.create({
-            data: { userId: deposit.userId, balance: deposit.amount }
+          // Regular deposit
+          const wallet = await tx.wallet.findUnique({ where: { userId: deposit.userId } });
+          if (wallet) {
+            await tx.wallet.update({
+              where: { userId: deposit.userId },
+              data: { balance: { increment: deposit.amount } }
+            });
+          } else {
+            await tx.wallet.create({
+              data: { userId: deposit.userId, balance: deposit.amount }
+            });
+          }
+
+          if (user && !user.isUnlocked) {
+            await tx.user.update({
+              where: { id: deposit.userId },
+              data: { isUnlocked: true }
+            });
+          }
+
+          await tx.transaction.create({
+            data: {
+              userId: deposit.userId,
+              type: 'deposit',
+              asset: 'wallet',
+              amount: deposit.amount,
+              details: `Manual Deposit Approved (UTR: ${deposit.utrNumber})`
+            }
           });
         }
 
-        await tx.transaction.create({
-          data: {
-            userId: deposit.userId,
-            type: 'deposit',
-            asset: 'wallet',
-            amount: deposit.amount,
-            details: `Manual Deposit Approved (UTR: ${deposit.utrNumber})`
-          }
-        });
+        // Post confirmation message to support chat
+        if (user) {
+          await tx.supportMessage.create({
+            data: {
+              sender: 'executive',
+              userEmail: user.email.toLowerCase(),
+              execId: req.executive.id,
+              text: `✅ Deposit of ₹${deposit.amount} Approved! ${deposit.amount === 10 ? 'Account unlocked successfully.' : 'Wallet balance updated.'}`
+            }
+          });
+        }
       });
     } else if (action === 'reject') {
-      await prisma.manualDeposit.update({
-        where: { id: deposit.id },
-        data: { status: 'Rejected', execId: req.executive.id }
+      await prisma.$transaction(async (tx) => {
+        await tx.manualDeposit.update({
+          where: { id: deposit.id },
+          data: { status: 'Rejected', execId: req.executive.id }
+        });
+        const user = await tx.user.findUnique({ where: { id: deposit.userId } });
+        if (user) {
+          await tx.supportMessage.create({
+            data: {
+              sender: 'executive',
+              userEmail: user.email.toLowerCase(),
+              execId: req.executive.id,
+              text: `❌ Deposit of ₹${deposit.amount} Rejected. Please contact support or submit a valid receipt.`
+            }
+          });
+        }
       });
     }
 
