@@ -186,6 +186,7 @@ model ManualDeposit {
   screenshotUrl String?
   status        String   @default("Pending") // 'Pending', 'Approved', 'Rejected'
   paymentMethod String?
+  notes         String?  // 'unlock_fee' or 'wallet_deposit' — set at submission time
   reviewedBy    SupportExecutive? @relation(fields: [execId], references: [id])
   execId        Int?
   createdAt     DateTime @default(now())

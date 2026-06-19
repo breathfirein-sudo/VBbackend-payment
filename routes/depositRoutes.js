@@ -91,10 +91,26 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
       return res.status(400).json({ success: false, error: 'Amount and UTR number are required' });
     }
 
-    const existing = await prisma.manualDeposit.findUnique({ where: { utrNumber } });
-    if (existing) {
-      return res.status(400).json({ success: false, error: 'Deposit with this UTR already exists' });
+    // Block duplicate pending deposits — one payment at a time
+    const existingPending = await prisma.manualDeposit.findFirst({
+      where: { userId: req.user.id, status: 'Pending' }
+    });
+    if (existingPending) {
+      return res.status(400).json({
+        success: false,
+        error: 'You already have a payment pending executive approval. Please wait for it to be reviewed before submitting another.'
+      });
     }
+
+    const existingUtr = await prisma.manualDeposit.findUnique({ where: { utrNumber } });
+    if (existingUtr) {
+      return res.status(400).json({ success: false, error: 'A deposit with this UTR/reference number already exists.' });
+    }
+
+    // Determine at submission time whether this is an account unlock payment
+    // (user is currently locked and amount is exactly 10)
+    const parsedAmount = parseFloat(amount);
+    const isUnlockDeposit = !req.user.isUnlocked && parsedAmount === 10;
 
     let screenshotUrl = null;
     if (req.file) {
@@ -104,11 +120,12 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
     const deposit = await prisma.manualDeposit.create({
       data: {
         userId: req.user.id,
-        amount: parseFloat(amount),
+        amount: parsedAmount,
         utrNumber,
         screenshotUrl,
         status: 'Pending',
-        paymentMethod: paymentMethod || 'UPI'
+        paymentMethod: paymentMethod || 'UPI',
+        notes: isUnlockDeposit ? 'unlock_fee' : 'wallet_deposit'
       }
     });
 
@@ -118,7 +135,9 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
         data: {
           sender: 'user',
           userEmail: req.user.email.toLowerCase(),
-          text: `Manual Deposit Submitted: ₹${amount} via ${paymentMethod || 'UPI'}. UTR: ${utrNumber}`,
+          text: isUnlockDeposit
+            ? `🔓 Account Opening Fee Submitted: ₹${parsedAmount} via ${paymentMethod || 'UPI'}. UTR: ${utrNumber}. Awaiting executive approval to unlock account.`
+            : `💰 Wallet Deposit Submitted: ₹${parsedAmount} via ${paymentMethod || 'UPI'}. UTR: ${utrNumber}. Awaiting executive approval.`,
           mediaUrl: screenshotUrl
         }
       });
@@ -126,7 +145,7 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
       console.error('Failed to auto-create support message for deposit:', chatErr);
     }
 
-    res.json({ success: true, deposit });
+    res.json({ success: true, deposit, isUnlockDeposit });
   } catch (error) {
     console.error('Manual deposit submit error:', error);
     res.status(500).json({ success: false, error: 'Failed to submit deposit' });
@@ -296,8 +315,13 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
 
         const user = await tx.user.findUnique({ where: { id: deposit.userId } });
 
-        if (deposit.amount === 10) {
-          // Treat as vault unlock fee
+        // Use the stored notes flag set at submission time to determine deposit type.
+        // This is more reliable than comparing amount === 10 which can misclassify
+        // regular ₹10 wallet deposits as unlock fees.
+        const isUnlockFee = deposit.notes === 'unlock_fee';
+
+        if (isUnlockFee) {
+          // Account opening unlock fee — unlock user, do NOT credit wallet
           if (user) {
             await tx.user.update({
               where: { id: deposit.userId },
@@ -314,7 +338,7 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
             }
           });
         } else {
-          // Regular deposit
+          // Regular wallet deposit — credit wallet balance
           const wallet = await tx.wallet.findUnique({ where: { userId: deposit.userId } });
           if (wallet) {
             await tx.wallet.update({
@@ -327,6 +351,7 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
             });
           }
 
+          // Also unlock the account if it was still locked (e.g. admin did a bulk wallet deposit)
           if (user && !user.isUnlocked) {
             await tx.user.update({
               where: { id: deposit.userId },
@@ -352,7 +377,9 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
               sender: 'executive',
               userEmail: user.email.toLowerCase(),
               execId: req.executive.id,
-              text: `✅ Deposit of ₹${deposit.amount} Approved! ${deposit.amount === 10 ? 'Account unlocked successfully.' : 'Wallet balance updated.'}`
+              text: isUnlockFee
+                ? `✅ Account Opening Fee of ₹${deposit.amount} Approved! Your account is now unlocked. Welcome to Investhour! 🎉`
+                : `✅ Wallet Deposit of ₹${deposit.amount} Approved! Your wallet balance has been updated.`
             }
           });
         }
