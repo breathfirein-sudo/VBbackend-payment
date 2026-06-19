@@ -38,10 +38,19 @@ router.post('/validate', async (req, res) => {
         orderBy: { createdAt: 'desc' }
       });
 
+      // Find if there is any pending manual deposit for this user
+      const pendingDeposit = await prisma.manualDeposit.findFirst({
+        where: {
+          userId: user.id,
+          status: 'Pending'
+        }
+      });
+
       res.json({
         valid: true,
         referralCount: user.referralCount,
         isUnlocked: user.isUnlocked || user.referralCount >= 1,
+        hasPendingUnlockDeposit: !!pendingDeposit,
         walletBalance: user.wallet?.balance || 0,
         withdrawableBalance: withdrawableBalance,
         kycStatus: user.kycStatus || 'Pending',
