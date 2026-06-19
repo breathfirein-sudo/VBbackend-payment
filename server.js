@@ -6,8 +6,9 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 
-if (!fs.existsSync('uploads')) {
-  fs.mkdirSync('uploads', { recursive: true });
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
 const chartRoutes = require('./routes/chartRoutes');
