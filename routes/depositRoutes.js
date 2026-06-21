@@ -12,22 +12,26 @@ const requireUserAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      console.log('[AUTH] No token provided for', req.path);
       return res.status(401).json({ success: false, error: 'Unauthorized: No token provided' });
     }
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     if (decoded.isExecutive) {
+      console.log('[AUTH] Executive token rejected for client endpoint', req.path, decoded.email);
       return res.status(403).json({ success: false, error: 'Forbidden: Access restricted to clients' });
     }
     const user = await prisma.user.findUnique({
       where: { email: decoded.email.toLowerCase() }
     });
     if (!user) {
+      console.log('[AUTH] User not found for token email:', decoded.email);
       return res.status(401).json({ success: false, error: 'Unauthorized: User not found' });
     }
     req.user = user;
     next();
   } catch (error) {
+    console.log('[AUTH] Token verification failed:', error.message);
     return res.status(401).json({ success: false, error: 'Unauthorized: Invalid token' });
   }
 };
@@ -85,6 +89,7 @@ const upload = multer({
 
 // User submits manual deposit
 router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req, res) => {
+  console.log('[DEPOSIT SUBMIT] User:', req.user?.email, 'Amount:', req.body?.amount, 'UTR:', req.body?.utrNumber);
   try {
     const { amount, utrNumber, paymentMethod } = req.body;
     if (!amount || !utrNumber) {

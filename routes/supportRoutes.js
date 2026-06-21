@@ -510,6 +510,20 @@ router.post('/support/chats/send', requireExecAuth, async (req, res) => {
   }
 });
 
+// DELETE /api/support/chats/:userEmail - Resolve and end/clear conversation thread
+router.delete('/support/chats/:userEmail', requireExecAuth, async (req, res) => {
+  const { userEmail } = req.params;
+  try {
+    await prisma.supportMessage.deleteMany({
+      where: { userEmail: userEmail.trim().toLowerCase() }
+    });
+    res.json({ success: true, message: 'Thread resolved and chat ended successfully' });
+  } catch (error) {
+    console.error('Resolve thread error:', error);
+    res.status(500).json({ success: false, error: 'Failed to resolve thread' });
+  }
+});
+
 // GET /api/user/chats - Customer fetches their own message history
 router.get('/user/chats', requireUserAuth, async (req, res) => {
   try {
@@ -517,8 +531,26 @@ router.get('/user/chats', requireUserAuth, async (req, res) => {
       where: { userEmail: req.user.email.toLowerCase() },
       orderBy: { createdAt: 'asc' }
     });
-    res.json({ success: true, messages });
+
+    const execIds = [...new Set(messages.filter(m => m.sender === 'executive' && m.execId).map(m => m.execId))];
+    const executives = await prisma.supportExecutive.findMany({
+      where: { id: { in: execIds } },
+      select: { id: true, name: true }
+    });
+
+    const execMap = {};
+    for (let ex of executives) {
+      execMap[ex.id] = ex.name;
+    }
+
+    const messagesWithExec = messages.map(msg => ({
+      ...msg,
+      execName: msg.execId ? (execMap[msg.execId] || 'Support Agent') : null
+    }));
+
+    res.json({ success: true, messages: messagesWithExec });
   } catch (error) {
+    console.error('Error fetching user chats:', error);
     res.status(500).json({ success: false, error: 'Failed to load support history' });
   }
 });

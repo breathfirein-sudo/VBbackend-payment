@@ -13,6 +13,7 @@ async function main() {
   const id = user.id;
   console.log(`Deleting user: ${user.email} (ID: ${id})`);
 
+  await prisma.manualDeposit.deleteMany({ where: { userId: id } });
   await prisma.payment.deleteMany({ where: { userId: id } });
   await prisma.transaction.deleteMany({ where: { userId: id } });
   await prisma.position.deleteMany({ where: { userId: id } });
