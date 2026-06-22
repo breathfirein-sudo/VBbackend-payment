@@ -1,11 +1,8 @@
-FROM node:20-alpine
+FROM node:20
 WORKDIR /app
-
-# COPY package.json package-lock.json ./
-COPY . .
+COPY package*.json ./
+COPY prisma ./prisma
 RUN npm install --production
-
-RUN npx prisma generate
-
+COPY . .
 EXPOSE 5000
 CMD ["node", "server.js"]
