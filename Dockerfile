@@ -7,5 +7,5 @@ RUN npm install --production
 
 RUN npx prisma generate
 
-EXPOSE 7000
+EXPOSE 5000
 CMD ["node", "server.js"]
