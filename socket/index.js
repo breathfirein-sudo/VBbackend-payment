@@ -17,6 +17,41 @@ const getPollingFrequency = (intv) => {
 
 const setupSocket = (io) => {
 
+  // Global background worker to reassign unaccepted chats
+  setInterval(async () => {
+    try {
+      const thirtySecondsAgo = new Date(Date.now() - 30000);
+      const pendingSessions = await globalPrisma.supportSession.findMany({
+        where: {
+          status: 'Pending',
+          assignedAt: { lt: thirtySecondsAgo }
+        }
+      });
+
+      for (let session of pendingSessions) {
+        const activeExecs = await globalPrisma.supportExecutive.findMany({
+          where: { 
+            status: 'Active', 
+            role: { in: ['Chat', 'Both'] },
+            id: { not: session.execId || undefined } 
+          }
+        });
+
+        if (activeExecs.length > 0) {
+          const newExecId = activeExecs[Math.floor(Math.random() * activeExecs.length)].id;
+          await globalPrisma.supportSession.update({
+            where: { id: session.id },
+            data: { execId: newExecId, assignedAt: new Date() }
+          });
+          io.emit('chat_reassigned', { userEmail: session.userEmail, newExecId });
+          console.log(`Reassigned chat for ${session.userEmail} to executive ${newExecId}`);
+        }
+      }
+    } catch (err) {
+      console.error('Error reassigning chats:', err.message);
+    }
+  }, 5000); // Check every 5 seconds
+
   // Global background worker to resolve expired trades
   setInterval(async () => {
     try {

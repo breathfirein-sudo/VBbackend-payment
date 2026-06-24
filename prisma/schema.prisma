@@ -8,33 +8,32 @@ datasource db {
 }
 
 model User {
-  id           Int           @id @default(autoincrement())
-  email        String        @unique
-  name         String?
-  phone        String?
-  password     String?
-  wallet       Wallet?
-  trades       Trade[]
-  positions    Position[]
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  transactions Transaction[]
-  payments     Payment[]
-  manualDeposits ManualDeposit[]
-  referralCount Int           @default(0)
-  isUnlocked   Boolean       @default(false)
-  kycStatus    String        @default("Pending")
-  kycDocument  String?       @db.Text
-  kycDocName   String?
-  kycDocType   String?
-  kycUploadedAt String?
+  id               Int             @id @default(autoincrement())
+  email            String          @unique
+  name             String?
+  password         String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  referralCount    Int             @default(0)
+  kycDocName       String?
+  kycDocType       String?
+  kycDocument      String?
+  kycStatus        String          @default("Pending")
+  kycUploadedAt    String?
+  isUnlocked       Boolean         @default(false)
   resetToken       String?
   resetTokenExpiry DateTime?
+  phone            String?
+  manualDeposits   ManualDeposit[]
+  payments         Payment[]
+  positions        Position[]
+  trades           Trade[]
+  transactions     Transaction[]
+  wallet           Wallet?
 }
 
 model Wallet {
   id           Int      @id @default(autoincrement())
-  user         User     @relation(fields: [userId], references: [id])
   userId       Int      @unique
   balance      Float    @default(0)
   lockedAmount Float    @default(0)
@@ -42,11 +41,11 @@ model Wallet {
   winRate      Float    @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id])
 }
 
 model Trade {
   id              Int       @id @default(autoincrement())
-  user            User      @relation(fields: [userId], references: [id])
   userId          Int
   asset           String
   side            String
@@ -66,11 +65,11 @@ model Trade {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   position        Position?
+  user            User      @relation(fields: [userId], references: [id])
 }
 
 model Position {
   id         Int       @id @default(autoincrement())
-  trade      Trade     @relation(fields: [tradeId], references: [id])
   tradeId    Int       @unique
   openPrice  Float
   closePrice Float?
@@ -79,8 +78,9 @@ model Position {
   status     String
   openedAt   DateTime  @default(now())
   closedAt   DateTime?
-  user       User?     @relation(fields: [userId], references: [id])
   userId     Int?
+  trade      Trade     @relation(fields: [tradeId], references: [id])
+  user       User?     @relation(fields: [userId], references: [id])
 }
 
 model Candle {
@@ -106,7 +106,6 @@ model MarketTick {
 
 model Transaction {
   id        Int      @id @default(autoincrement())
-  user      User     @relation(fields: [userId], references: [id])
   userId    Int
   type      String
   asset     String
@@ -115,11 +114,11 @@ model Transaction {
   gst       Float?
   details   String?
   createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
 }
 
 model Payment {
   id                    String   @id @default(uuid())
-  user                  User     @relation(fields: [userId], references: [id])
   userId                Int
   orderId               String   @unique
   paymentId             String?
@@ -128,44 +127,45 @@ model Payment {
   currency              String   @default("INR")
   status                String   @default("created")
   paymentMethod         String?
-  upiId                 String?
-  bankAccount           String?
-  ifsc                  String?
-  bankName              String?
-  accountHolder         String?
-  availableBalanceAfter Float?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+  accountHolder         String?
+  availableBalanceAfter Float?
+  bankAccount           String?
+  bankName              String?
+  ifsc                  String?
+  upiId                 String?
+  user                  User     @relation(fields: [userId], references: [id])
 }
 
 model SupportExecutive {
-  id            Int      @id @default(autoincrement())
-  name          String
-  phone         String?
-  email         String?
-  password      String?
-  attendance    String   @default("[]")
-  role          String   // 'Chat', 'Call', 'Both'
-  salary        Float
-  status        String   @default("Active") // 'Active', 'Inactive'
-  shift         String   @default("Day") // 'Day', 'Night', 'Rotational'
-  languages     String   @default("English, Hindi")
-  rating        Float    @default(5.0)
-  experienceYrs Int      @default(0)
-  settings      String   @default("{}")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             Int             @id @default(autoincrement())
+  name           String
+  phone          String?
+  email          String?
+  role           String
+  salary         Float
+  status         String          @default("Active")
+  shift          String          @default("Day")
+  languages      String          @default("English, Hindi")
+  rating         Float           @default(5.0)
+  experienceYrs  Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  password       String?
+  attendance     String          @default("[]")
+  settings       String          @default("{}")
   manualDeposits ManualDeposit[]
 }
 
 model SupportMessage {
   id        Int      @id @default(autoincrement())
-  sender    String   // 'user' or 'executive'
+  sender    String
   userEmail String
   execId    Int?
   text      String
-  mediaUrl  String?
   createdAt DateTime @default(now())
+  mediaUrl  String?
 }
 
 model CallRequest {
@@ -173,22 +173,83 @@ model CallRequest {
   userEmail String
   userName  String
   phone     String
-  status    String   @default("Pending") // 'Pending', 'Connected', 'Closed'
+  execId    Int?     // assigned executive ID
+  status    String   @default("Pending")
   createdAt DateTime @default(now())
 }
 
+model SupportSession {
+  id         Int       @id @default(autoincrement())
+  userEmail  String    @unique
+  execId     Int?      // assigned executive ID
+  status     String    @default("Pending") // 'Pending', 'Active', 'Resolved'
+  assignedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+}
+
 model ManualDeposit {
-  id            Int      @id @default(autoincrement())
-  user          User     @relation(fields: [userId], references: [id])
+  id            Int               @id @default(autoincrement())
   userId        Int
   amount        Float
-  utrNumber     String   @unique
+  utrNumber     String            @unique
   screenshotUrl String?
-  status        String   @default("Pending") // 'Pending', 'Approved', 'Rejected'
-  paymentMethod String?
-  notes         String?  // 'unlock_fee' or 'wallet_deposit' — set at submission time
-  reviewedBy    SupportExecutive? @relation(fields: [execId], references: [id])
+  status        String            @default("Pending")
   execId        Int?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  paymentMethod String?
+  notes         String?
+  reviewedBy    SupportExecutive? @relation(fields: [execId], references: [id])
+  user          User              @relation(fields: [userId], references: [id])
+}
+
+model contest_participants {
+  email          String           @id @db.VarChar(255)
+  name           String           @db.VarChar(255)
+  balance        Decimal?         @default(11000.00) @db.Decimal(18, 2)
+  total_trades   Int?             @default(0)
+  profit_trades  Int?             @default(0)
+  loss_trades    Int?             @default(0)
+  success_rate   Decimal?         @default(0.00) @db.Decimal(5, 2)
+  registered_at  DateTime?        @default(now()) @db.Timestamp(6)
+  contest_trades contest_trades[]
+}
+
+model contest_trades {
+  id                   Int                  @id @default(autoincrement())
+  user_email           String               @db.VarChar(255)
+  symbol               String               @db.VarChar(50)
+  price                Decimal              @db.Decimal(18, 8)
+  quantity             Decimal              @db.Decimal(18, 8)
+  type                 String               @db.VarChar(10)
+  status               String?              @default("OPEN") @db.VarChar(10)
+  entry_amount         Decimal              @db.Decimal(18, 2)
+  expiry_time          DateTime             @db.Timestamp(6)
+  close_price          Decimal?             @db.Decimal(18, 8)
+  pnl                  Decimal?             @default(0.00) @db.Decimal(18, 2)
+  timestamp            DateTime?            @default(now()) @db.Timestamp(6)
+  contest_participants contest_participants @relation(fields: [user_email], references: [email], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model trades {
+  id                    Int       @id @default(autoincrement())
+  symbol                String    @db.VarChar(10)
+  price                 Decimal   @db.Decimal(10, 2)
+  quantity              Decimal   @db.Decimal(10, 4)
+  type                  String    @db.VarChar(4)
+  timestamp             DateTime? @default(now()) @db.Timestamp(6)
+  status                String?   @default("OPEN") @db.VarChar(10)
+  expiry_time           DateTime? @db.Timestamp(6)
+  close_price           Decimal?  @db.Decimal(10, 2)
+  user_email            String?   @db.VarChar(255)
+  investment_amount     Decimal?  @default(0.00) @db.Decimal(18, 2)
+  pnl                   Decimal?  @default(0.00) @db.Decimal(18, 2)
+  trade_stake           Decimal?  @default(10.00) @db.Decimal(10, 2)
+  application_fee       Decimal?  @default(1.00) @db.Decimal(10, 2)
+  returned_amount       Decimal?  @default(0.00) @db.Decimal(10, 2)
+  profit_loss_amount    Decimal?  @default(0.00) @db.Decimal(10, 2)
+  user_id               Int?
+  wallet_balance_before Decimal?  @default(0.00) @db.Decimal
+  wallet_balance_after  Decimal?  @default(0.00) @db.Decimal
 }

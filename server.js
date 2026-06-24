@@ -58,6 +58,7 @@ const io = new Server(server, {
     methods: ['GET', 'POST']
   }
 });
+app.set('io', io);
 setupSocket(io);
 
 // Global error handling middleware (always returns JSON)

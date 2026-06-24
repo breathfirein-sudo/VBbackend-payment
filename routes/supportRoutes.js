@@ -444,22 +444,40 @@ router.post('/support/upload', upload.single('file'), async (req, res) => {
 // 3. CHAT COMMUNICATIONS (EXECUTIVE & USER)
 // ==========================================
 
+const assignExecutive = async (roleType) => {
+  const activeExecs = await prisma.supportExecutive.findMany({
+    where: { 
+      status: 'Active', 
+      role: { in: [roleType, 'Both'] }
+    }
+  });
+  if (activeExecs.length === 0) return null;
+  return activeExecs[Math.floor(Math.random() * activeExecs.length)].id;
+};
+
 // GET /api/support/chats - Executive fetches all conversation threads grouped by user
 router.get('/support/chats', requireExecAuth, async (req, res) => {
   try {
-    // We group messages by userEmail. In Prisma, we will fetch all messages and group in JS.
+    const assignedSessions = await prisma.supportSession.findMany({
+      where: { execId: req.executive.id }
+    });
+    const assignedEmails = assignedSessions.map(s => s.userEmail);
+
     const allMsgs = await prisma.supportMessage.findMany({
+      where: { userEmail: { in: assignedEmails } },
       orderBy: { createdAt: 'desc' }
     });
 
     const threadsMap = {};
     for (let msg of allMsgs) {
       if (!threadsMap[msg.userEmail]) {
+        const session = assignedSessions.find(s => s.userEmail === msg.userEmail);
         threadsMap[msg.userEmail] = {
           userEmail: msg.userEmail,
           lastText: msg.text,
           lastTime: msg.createdAt,
-          messageCount: 0
+          messageCount: 0,
+          sessionStatus: session ? session.status : 'Pending'
         };
       }
       threadsMap[msg.userEmail].messageCount++;
@@ -471,6 +489,28 @@ router.get('/support/chats', requireExecAuth, async (req, res) => {
     res.status(500).json({ success: false, error: 'Failed to fetch chat threads' });
   }
 });
+
+// POST /api/support/chats/accept - Executive accepts a chat
+router.post('/support/chats/accept', requireExecAuth, async (req, res) => {
+  const { userEmail } = req.body;
+  try {
+    const session = await prisma.supportSession.update({
+      where: { userEmail: userEmail.trim().toLowerCase() },
+      data: { status: 'Active' }
+    });
+    
+    // Emit real-time event to the specific executive room or broadcast to all
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('chat_accepted', { userEmail: session.userEmail, execId: session.execId });
+    }
+
+    res.json({ success: true, session });
+  } catch (error) {
+    res.status(500).json({ success: false, error: 'Failed to accept chat' });
+  }
+});
+
 
 // GET /api/support/chats/:userEmail - Executive fetches message history with a client
 router.get('/support/chats/:userEmail', requireExecAuth, async (req, res) => {
@@ -516,6 +556,10 @@ router.delete('/support/chats/:userEmail', requireExecAuth, async (req, res) => 
   try {
     await prisma.supportMessage.deleteMany({
       where: { userEmail: userEmail.trim().toLowerCase() }
+    });
+    await prisma.supportSession.update({
+      where: { userEmail: userEmail.trim().toLowerCase() },
+      data: { status: 'Resolved' }
     });
     res.json({ success: true, message: 'Thread resolved and chat ended successfully' });
   } catch (error) {
@@ -563,10 +607,32 @@ router.post('/user/chats/send', requireUserAuth, async (req, res) => {
   }
 
   try {
+    const userEmail = req.user.email.toLowerCase();
+    
+    let session = await prisma.supportSession.findUnique({ where: { userEmail } });
+    if (!session || session.status === 'Resolved') {
+      const execId = await assignExecutive('Chat');
+      if (session) {
+        session = await prisma.supportSession.update({
+          where: { userEmail },
+          data: { status: 'Pending', execId, assignedAt: new Date() }
+        });
+      } else {
+        session = await prisma.supportSession.create({
+          data: { userEmail, status: 'Pending', execId, assignedAt: new Date() }
+        });
+      }
+      
+      const io = req.app.get('io');
+      if (io && execId) {
+        io.emit('chat_assigned', { userEmail, execId });
+      }
+    }
+
     const message = await prisma.supportMessage.create({
       data: {
         sender: 'user',
-        userEmail: req.user.email.toLowerCase(),
+        userEmail,
         text: text || '',
         mediaUrl: mediaUrl || null
       }
@@ -586,6 +652,7 @@ router.post('/user/chats/send', requireUserAuth, async (req, res) => {
 router.get('/support/call-requests', requireExecAuth, async (req, res) => {
   try {
     const requests = await prisma.callRequest.findMany({
+      where: { execId: req.executive.id },
       orderBy: { createdAt: 'desc' }
     });
     res.json({ success: true, requests });
@@ -634,14 +701,21 @@ router.post('/user/call-request', requireUserAuth, async (req, res) => {
       return res.json({ success: true, message: 'You have already requested a callback. Support will reach out shortly.', request: existing });
     }
 
+    const execId = await assignExecutive('Call');
     const request = await prisma.callRequest.create({
       data: {
         userEmail: req.user.email.toLowerCase(),
         userName: req.user.name || req.user.email.split('@')[0],
         phone,
+        execId,
         status: 'Pending'
       }
     });
+
+    const io = req.app.get('io');
+    if (io && execId) {
+      io.emit('call_requested', { userEmail: request.userEmail, execId });
+    }
 
     res.json({ success: true, message: 'Callback requested successfully!', request });
   } catch (error) {

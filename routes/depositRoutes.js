@@ -8,6 +8,17 @@ const prisma = new PrismaClient();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'replace-with-your-secret';
 
+const assignExecutive = async (roleType) => {
+  const activeExecs = await prisma.supportExecutive.findMany({
+    where: { 
+      status: 'Active', 
+      role: { in: [roleType, 'Both'] }
+    }
+  });
+  if (activeExecs.length === 0) return null;
+  return activeExecs[Math.floor(Math.random() * activeExecs.length)].id;
+};
+
 const requireUserAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -122,17 +133,25 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
       screenshotUrl = `/uploads/${req.file.filename}`;
     }
 
+    const execId = await assignExecutive('Deposit') || await assignExecutive('Both');
+
     const deposit = await prisma.manualDeposit.create({
       data: {
         userId: req.user.id,
         amount: parsedAmount,
         utrNumber,
         screenshotUrl,
+        execId,
         status: 'Pending',
         paymentMethod: paymentMethod || 'UPI',
         notes: isUnlockDeposit ? 'unlock_fee' : 'wallet_deposit'
       }
     });
+
+    const io = req.app.get('io');
+    if (io && execId) {
+      io.emit('deposit_requested', { execId, deposit });
+    }
 
     // Automatically post the manual deposit to the user's support chat
     try {
@@ -161,7 +180,7 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
 router.get('/pending', requireExecAuth, async (req, res) => {
   try {
     const deposits = await prisma.manualDeposit.findMany({
-      where: { status: 'Pending' },
+      where: { status: 'Pending', execId: req.executive.id },
       include: {
         user: { select: { id: true, email: true, name: true, phone: true } }
       },
@@ -178,7 +197,7 @@ router.get('/list', requireExecAuth, async (req, res) => {
   try {
     const { status, search, limit = 50, offset = 0 } = req.query;
     
-    let whereClause = {};
+    let whereClause = { execId: req.executive.id };
     if (status && status !== 'All Status') {
       whereClause.status = status;
     }
@@ -206,8 +225,9 @@ router.get('/list', requireExecAuth, async (req, res) => {
 
     const total = await prisma.manualDeposit.count({ where: whereClause });
 
-    // Calculate metrics for ALL manual deposits in the system
+    // Calculate metrics for manual deposits assigned to this executive
     const allDeposits = await prisma.manualDeposit.findMany({
+      where: { execId: req.executive.id },
       select: {
         amount: true,
         status: true,
@@ -407,6 +427,11 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
           });
         }
       });
+    }
+
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('deposit_action', { depositId: deposit.id, status: action === 'approve' ? 'Approved' : 'Rejected', execId: req.executive.id });
     }
 
     res.json({ success: true, message: `Deposit ${action}d successfully` });
