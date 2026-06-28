@@ -15,40 +15,20 @@ const getPollingFrequency = (intv) => {
   return 60000; // default 1m
 };
 
+const { 
+  acceptRequest, 
+  declineRequest, 
+  checkPendingQueue 
+} = require('../services/supportDispatcher');
+
 const setupSocket = (io) => {
 
-  // Global background worker to reassign unaccepted chats
+  // Global background worker to check and dispatch pending queued support requests
   setInterval(async () => {
     try {
-      const thirtySecondsAgo = new Date(Date.now() - 30000);
-      const pendingSessions = await globalPrisma.supportSession.findMany({
-        where: {
-          status: 'Pending',
-          assignedAt: { lt: thirtySecondsAgo }
-        }
-      });
-
-      for (let session of pendingSessions) {
-        const activeExecs = await globalPrisma.supportExecutive.findMany({
-          where: { 
-            status: 'Active', 
-            role: { in: ['Chat', 'Both'] },
-            id: { not: session.execId || undefined } 
-          }
-        });
-
-        if (activeExecs.length > 0) {
-          const newExecId = activeExecs[Math.floor(Math.random() * activeExecs.length)].id;
-          await globalPrisma.supportSession.update({
-            where: { id: session.id },
-            data: { execId: newExecId, assignedAt: new Date() }
-          });
-          io.emit('chat_reassigned', { userEmail: session.userEmail, newExecId });
-          console.log(`Reassigned chat for ${session.userEmail} to executive ${newExecId}`);
-        }
-      }
+      await checkPendingQueue(io);
     } catch (err) {
-      console.error('Error reassigning chats:', err.message);
+      console.error('Error in support queue worker:', err.message);
     }
   }, 5000); // Check every 5 seconds
 
@@ -412,6 +392,21 @@ const setupSocket = (io) => {
       activeInterval = interval;
       console.log(`Client ${socket.id} subscribed to ${symbol} on ${interval}`);
       await startPolling();
+    });
+
+    socket.on('exec_clocked_in', async () => {
+      console.log(`[Socket] Executive socket ${socket.id} reported clocked in. Checking queue...`);
+      await checkPendingQueue(io);
+    });
+
+    socket.on('accept_support_request', async ({ type, requestId, userEmail, execId }) => {
+      console.log(`[Socket] Executive ${execId} accepted ${type}:${requestId}`);
+      await acceptRequest(io, type, requestId, userEmail, execId);
+    });
+
+    socket.on('decline_support_request', async ({ type, requestId, userEmail, execId }) => {
+      console.log(`[Socket] Executive ${execId} declined ${type}:${requestId}`);
+      await declineRequest(io, type, requestId, userEmail, execId);
     });
 
     socket.on('disconnect', () => {

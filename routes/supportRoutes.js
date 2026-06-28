@@ -8,6 +8,7 @@ const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'replace-with-your-secret';
+const { dispatchSupportRequest, resolveRequest, acceptRequest } = require('../services/supportDispatcher');
 
 // --- Executive Authentication Middleware ---
 const requireExecAuth = async (req, res, next) => {
@@ -557,10 +558,12 @@ router.delete('/support/chats/:userEmail', requireExecAuth, async (req, res) => 
     await prisma.supportMessage.deleteMany({
       where: { userEmail: userEmail.trim().toLowerCase() }
     });
-    await prisma.supportSession.update({
+    const session = await prisma.supportSession.update({
       where: { userEmail: userEmail.trim().toLowerCase() },
       data: { status: 'Resolved' }
     });
+    const io = req.app.get('io');
+    await resolveRequest(io, 'chat', session.id, userEmail.trim().toLowerCase(), req.executive.id);
     res.json({ success: true, message: 'Thread resolved and chat ended successfully' });
   } catch (error) {
     console.error('Resolve thread error:', error);
@@ -610,23 +613,20 @@ router.post('/user/chats/send', requireUserAuth, async (req, res) => {
     const userEmail = req.user.email.toLowerCase();
     
     let session = await prisma.supportSession.findUnique({ where: { userEmail } });
+    const io = req.app.get('io');
     if (!session || session.status === 'Resolved') {
-      const execId = await assignExecutive('Chat');
       if (session) {
         session = await prisma.supportSession.update({
           where: { userEmail },
-          data: { status: 'Pending', execId, assignedAt: new Date() }
+          data: { status: 'Pending', execId: null, assignedAt: new Date() }
         });
       } else {
         session = await prisma.supportSession.create({
-          data: { userEmail, status: 'Pending', execId, assignedAt: new Date() }
+          data: { userEmail, status: 'Pending', execId: null, assignedAt: new Date() }
         });
       }
       
-      const io = req.app.get('io');
-      if (io && execId) {
-        io.emit('chat_assigned', { userEmail, execId });
-      }
+      await dispatchSupportRequest(io, 'chat', session.id, userEmail, req.user.name, req.user.phone);
     }
 
     const message = await prisma.supportMessage.create({
@@ -674,6 +674,10 @@ router.post('/support/call-requests/:id/status', requireExecAuth, async (req, re
       where: { id: parseInt(id) },
       data: { status }
     });
+    if (status === 'Closed') {
+      const io = req.app.get('io');
+      await resolveRequest(io, 'call', updated.id, updated.userEmail, req.executive.id);
+    }
     res.json({ success: true, request: updated });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to update call status' });
@@ -701,21 +705,18 @@ router.post('/user/call-request', requireUserAuth, async (req, res) => {
       return res.json({ success: true, message: 'You have already requested a callback. Support will reach out shortly.', request: existing });
     }
 
-    const execId = await assignExecutive('Call');
+    const io = req.app.get('io');
     const request = await prisma.callRequest.create({
       data: {
         userEmail: req.user.email.toLowerCase(),
         userName: req.user.name || req.user.email.split('@')[0],
         phone,
-        execId,
+        execId: null,
         status: 'Pending'
       }
     });
 
-    const io = req.app.get('io');
-    if (io && execId) {
-      io.emit('call_requested', { userEmail: request.userEmail, execId });
-    }
+    await dispatchSupportRequest(io, 'call', request.id, request.userEmail, request.userName, phone);
 
     res.json({ success: true, message: 'Callback requested successfully!', request });
   } catch (error) {

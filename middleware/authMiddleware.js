@@ -16,7 +16,7 @@ const requireAuth = async (req, res, next) => {
     let decoded;
     
     if (token === 'dummy-token-for-dev') {
-      email = 'testuser@example.com';
+      return res.status(401).json({ success: false, error: 'Unauthorized: Invalid token' });
     } else {
       try {
         decoded = jwt.verify(token, process.env.JWT_SECRET || 'replace-with-your-secret');
