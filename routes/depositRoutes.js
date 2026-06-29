@@ -155,7 +155,7 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
 
     // Automatically post the manual deposit to the user's support chat
     try {
-      await prisma.supportMessage.create({
+      const autoMsg = await prisma.supportMessage.create({
         data: {
           sender: 'user',
           userEmail: req.user.email.toLowerCase(),
@@ -165,6 +165,9 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
           mediaUrl: screenshotUrl
         }
       });
+      if (io) {
+        io.emit('new_support_message', autoMsg);
+      }
     } catch (chatErr) {
       console.error('Failed to auto-create support message for deposit:', chatErr);
     }

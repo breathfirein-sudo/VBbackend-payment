@@ -545,6 +545,11 @@ router.post('/support/chats/send', requireExecAuth, async (req, res) => {
       }
     });
 
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('new_support_message', message);
+    }
+
     res.json({ success: true, message });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to dispatch reply' });
@@ -637,6 +642,11 @@ router.post('/user/chats/send', requireUserAuth, async (req, res) => {
         mediaUrl: mediaUrl || null
       }
     });
+
+    if (io) {
+      io.emit('new_support_message', message);
+    }
+
     res.json({ success: true, message });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to send support message' });
