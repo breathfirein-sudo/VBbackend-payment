@@ -136,7 +136,7 @@ router.get('/support/performance-report', requireExecAuth, async (req, res) => {
     
     // 1. KPI Cards Calculations (System-wide calls, executive-specific chats/deposits/attendance)
     const callsResponded = await prisma.callRequest.count({
-      where: { status: { in: ['Connected', 'Closed'] } }
+      where: { execId: execId, status: { in: ['Connected', 'Closed'] } }
     });
 
     const chatsClosed = await prisma.supportMessage.count({
@@ -823,10 +823,14 @@ router.post('/support/call-requests/:id/status', requireExecAuth, async (req, re
       where: { id: parseInt(id) },
       data: { status }
     });
+    
+    const io = req.app.get('io');
     if (status === 'Closed') {
-      const io = req.app.get('io');
       await resolveRequest(io, 'call', updated.id, updated.userEmail, req.executive.id);
+    } else {
+      io.emit('call_requested'); // Triggers onUpdate in frontend to refresh counts
     }
+    
     res.json({ success: true, request: updated });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to update call status' });
