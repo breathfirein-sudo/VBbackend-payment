@@ -277,6 +277,19 @@ exports.register = async (req, res) => {
       }
     }
 
+    // Generate unique 6-digit number
+    let uniqueId;
+    let isUnique = false;
+    while (!isUnique) {
+      uniqueId = Math.floor(100000 + Math.random() * 900000).toString();
+      const existingUserWithId = await prisma.user.findUnique({
+        where: { uniqueId }
+      });
+      if (!existingUserWithId) {
+        isUnique = true;
+      }
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = await prisma.user.create({
       data: {
@@ -284,6 +297,7 @@ exports.register = async (req, res) => {
         name: name || emailLower.split('@')[0],
         phone: phone || null,
         password: hashedPassword,
+        uniqueId: uniqueId,
         wallet: {
           create: { balance: 0 } // start with 0 balance
         }
@@ -343,7 +357,8 @@ exports.register = async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
-        phone: user.phone
+        phone: user.phone,
+        uniqueId: user.uniqueId
       }
     });
   } catch (error) {
@@ -395,7 +410,8 @@ exports.login = async (req, res) => {
         id: user.id,
         email: user.email,
         name: user.name,
-        phone: user.phone
+        phone: user.phone,
+        uniqueId: user.uniqueId
       }
     });
   } catch (error) {

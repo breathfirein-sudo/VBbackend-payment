@@ -51,6 +51,8 @@ router.post('/validate', async (req, res) => {
         referralCount: user.referralCount,
         isUnlocked: user.isUnlocked || user.referralCount >= 1,
         hasPendingUnlockDeposit: !!pendingDeposit,
+        hasPendingDeposit: !!pendingDeposit,
+        hasPendingWithdrawal: lastWithdrawal ? lastWithdrawal.status === 'processing' : false,
         walletBalance: user.wallet?.balance || 0,
         withdrawableBalance: withdrawableBalance,
         kycStatus: user.kycStatus || 'Pending',

@@ -456,6 +456,124 @@ const assignExecutive = async (roleType) => {
   return activeExecs[Math.floor(Math.random() * activeExecs.length)].id;
 };
 
+// GET /api/support/pending-requests - Fetch all pending chat and call requests
+router.get('/support/pending-requests', requireExecAuth, async (req, res) => {
+  try {
+    const roleType = req.executive.role; // 'Chat', 'Call', or 'Both'
+    
+    let pendingChats = [];
+    if (roleType === 'Chat' || roleType === 'Both') {
+      pendingChats = await prisma.supportSession.findMany({
+        where: { status: 'Pending', execId: null },
+        orderBy: { createdAt: 'asc' }
+      });
+    }
+
+    let pendingCalls = [];
+    if (roleType === 'Call' || roleType === 'Both') {
+      pendingCalls = await prisma.callRequest.findMany({
+        where: { status: 'Pending', execId: null },
+        orderBy: { createdAt: 'asc' }
+      });
+    }
+
+    let pendingDeposits = [];
+    pendingDeposits = await prisma.manualDeposit.findMany({
+      where: { status: 'Pending', execId: null },
+      include: { user: true },
+      orderBy: { createdAt: 'asc' }
+    });
+
+    const pendingRequests = [
+      ...pendingChats.map(c => ({
+        type: 'chat',
+        id: c.id,
+        userEmail: c.userEmail,
+        userName: c.userEmail.split('@')[0],
+        timestamp: c.createdAt
+      })),
+      ...pendingCalls.map(c => ({
+        type: 'call',
+        id: c.id,
+        userEmail: c.userEmail,
+        userName: c.userName || c.userEmail.split('@')[0],
+        phone: c.phone || '',
+        timestamp: c.createdAt
+      })),
+      ...pendingDeposits.map(d => ({
+        type: 'deposit',
+        id: d.id,
+        userEmail: d.user.email,
+        userName: d.user.name || d.user.email.split('@')[0],
+        amount: d.amount,
+        timestamp: d.createdAt
+      }))
+    ].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    res.json({ success: true, pendingRequests });
+  } catch (error) {
+    console.error('Fetch pending error:', error);
+    res.status(500).json({ success: false, error: 'Failed to fetch pending requests' });
+  }
+});
+
+// POST /api/support/pending-requests/claim - Claim a pending request
+router.post('/support/pending-requests/claim', requireExecAuth, async (req, res) => {
+  const { type, requestId, userEmail } = req.body;
+  try {
+    let success = false;
+    
+    await prisma.$transaction(async (tx) => {
+      if (type === 'chat') {
+        const session = await tx.supportSession.findUnique({ where: { userEmail } });
+        if (session && session.status === 'Pending') {
+          await tx.supportSession.updateMany({
+            where: { userEmail },
+            data: { execId: req.executive.id, status: 'Active', assignedAt: new Date() }
+          });
+          success = true;
+        }
+      } else if (type === 'call') {
+        const call = await tx.callRequest.findUnique({ where: { id: parseInt(requestId) } });
+        if (call && call.status === 'Pending') {
+          await tx.callRequest.update({
+            where: { id: parseInt(requestId) },
+            data: { execId: req.executive.id, status: 'Connected' }
+          });
+          success = true;
+        }
+      } else if (type === 'deposit') {
+        const deposit = await tx.manualDeposit.findUnique({ where: { id: parseInt(requestId) } });
+        if (deposit && deposit.status === 'Pending' && !deposit.execId) {
+          await tx.manualDeposit.update({
+            where: { id: parseInt(requestId) },
+            data: { execId: req.executive.id }
+          });
+          success = true;
+        }
+      }
+    });
+
+    if (success) {
+      const io = req.app.get('io');
+      if (io) {
+        // Emit to others to remove it from their pending list
+        io.emit('request_claimed', { type, requestId, userEmail, execId: req.executive.id });
+        
+        // Notify the specific executive that they got it
+        io.emit('support_request_accepted', { reqKey: `${type}:${requestId}`, type, requestId, userEmail, execId: req.executive.id });
+        if (type === 'chat') io.emit('chat_accepted', { userEmail, execId: req.executive.id });
+      }
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ success: false, error: 'Request was already claimed or is no longer pending.' });
+    }
+  } catch (error) {
+    console.error('Claim request error:', error);
+    res.status(500).json({ success: false, error: 'Failed to claim request' });
+  }
+});
+
 // GET /api/support/chats - Executive fetches all conversation threads grouped by user
 router.get('/support/chats', requireExecAuth, async (req, res) => {
   try {
@@ -563,16 +681,23 @@ router.delete('/support/chats/:userEmail', requireExecAuth, async (req, res) => 
     await prisma.supportMessage.deleteMany({
       where: { userEmail: userEmail.trim().toLowerCase() }
     });
-    const session = await prisma.supportSession.update({
-      where: { userEmail: userEmail.trim().toLowerCase() },
-      data: { status: 'Resolved' }
+    const session = await prisma.supportSession.findUnique({
+      where: { userEmail: userEmail.trim().toLowerCase() }
     });
-    const io = req.app.get('io');
-    await resolveRequest(io, 'chat', session.id, userEmail.trim().toLowerCase(), req.executive.id);
+    
+    if (session) {
+      await prisma.supportSession.update({
+        where: { id: session.id },
+        data: { status: 'Resolved', execId: null }
+      });
+      const io = req.app.get('io');
+      await resolveRequest(io, 'chat', session.id, userEmail.trim().toLowerCase(), req.executive.id);
+    }
+
     res.json({ success: true, message: 'Thread resolved and chat ended successfully' });
   } catch (error) {
     console.error('Resolve thread error:', error);
-    res.status(500).json({ success: false, error: 'Failed to resolve thread' });
+    res.status(500).json({ success: false, error: `Failed to resolve thread: ${error.message}` });
   }
 });
 
@@ -665,7 +790,21 @@ router.get('/support/call-requests', requireExecAuth, async (req, res) => {
       where: { execId: req.executive.id },
       orderBy: { createdAt: 'desc' }
     });
-    res.json({ success: true, requests });
+    
+    const emails = requests.map(r => r.userEmail);
+    const users = await prisma.user.findMany({
+      where: { email: { in: emails } },
+      select: { email: true, uniqueId: true }
+    });
+    const userMap = {};
+    users.forEach(u => { userMap[u.email] = u.uniqueId; });
+    
+    const enriched = requests.map(r => ({
+      ...r,
+      uniqueId: userMap[r.userEmail] || 'N/A'
+    }));
+    
+    res.json({ success: true, requests: enriched });
   } catch (error) {
     res.status(500).json({ success: false, error: 'Failed to fetch call requests' });
   }

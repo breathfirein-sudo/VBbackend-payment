@@ -17,20 +17,10 @@ const getPollingFrequency = (intv) => {
 
 const { 
   acceptRequest, 
-  declineRequest, 
-  checkPendingQueue 
+  declineRequest 
 } = require('../services/supportDispatcher');
 
 const setupSocket = (io) => {
-
-  // Global background worker to check and dispatch pending queued support requests
-  setInterval(async () => {
-    try {
-      await checkPendingQueue(io);
-    } catch (err) {
-      console.error('Error in support queue worker:', err.message);
-    }
-  }, 5000); // Check every 5 seconds
 
   // Global background worker to resolve expired trades
   setInterval(async () => {
@@ -395,8 +385,7 @@ const setupSocket = (io) => {
     });
 
     socket.on('exec_clocked_in', async () => {
-      console.log(`[Socket] Executive socket ${socket.id} reported clocked in. Checking queue...`);
-      await checkPendingQueue(io);
+      console.log(`[Socket] Executive socket ${socket.id} reported clocked in.`);
     });
 
     socket.on('accept_support_request', async ({ type, requestId, userEmail, execId }) => {

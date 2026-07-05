@@ -68,101 +68,24 @@ const findAvailableExec = async (roleType, excludeExecIds = []) => {
 };
 
 // Dispatch or reassign a support request (chat or call)
-const dispatchSupportRequest = async (io, type, requestId, userEmail, userName, phone, attemptedExecIds = []) => {
-  const reqKey = `${type}:${requestId}`;
-
-  // Clear any existing timer for this request
-  if (activeDispatches.has(reqKey)) {
-    clearTimeout(activeDispatches.get(reqKey).timer);
-    activeDispatches.delete(reqKey);
-  }
-
-  const roleType = type === 'chat' ? 'Chat' : 'Call';
-  let selectedExec = await findAvailableExec(roleType, attemptedExecIds);
-
-  if (!selectedExec && attemptedExecIds.length > 0) {
-    console.log(`[Dispatcher] All attempted executives declined/timed out for ${reqKey}. Repeating loop across clocked-in executives...`);
-    attemptedExecIds = [];
-    selectedExec = await findAvailableExec(roleType, []);
-  }
-
-  if (!selectedExec) {
-    console.log(`[Dispatcher] No available clocked-in executive currently for ${reqKey}. Keeping in pending queue to retry.`);
-    // Update DB to reflect unassigned pending
-    if (type === 'chat') {
-      await prisma.supportSession.updateMany({
-        where: { userEmail },
-        data: { execId: null, status: 'Pending' }
-      });
-    } else {
-      await prisma.callRequest.updateMany({
-        where: { id: parseInt(requestId) },
-        data: { execId: null, status: 'Pending' }
-      });
-    }
-    return null;
-  }
-
-  console.log(`[Dispatcher] Dispatching ${reqKey} to Executive ID ${selectedExec.id} (${selectedExec.name})`);
-
-  // Update record in database
-  const now = new Date();
-  if (type === 'chat') {
-    await prisma.supportSession.updateMany({
-      where: { userEmail },
-      data: { execId: selectedExec.id, status: 'Pending', assignedAt: now }
-    });
-  } else {
-    await prisma.callRequest.update({
-      where: { id: parseInt(requestId) },
-      data: { execId: selectedExec.id, status: 'Pending' }
-    });
-  }
-
+const dispatchSupportRequest = async (io, type, requestId, userEmail, userName, phone) => {
   const payload = {
-    type, // 'chat' or 'call'
+    type,
     requestId,
     userEmail,
     userName: userName || userEmail.split('@')[0],
     phone: phone || '',
-    execId: selectedExec.id,
-    expiresAt: Date.now() + 30000 // 30 second countdown
+    timestamp: Date.now()
   };
 
-  // Broadcast event to executive sockets
   if (io) {
-    io.emit('incoming_support_request', payload);
+    io.emit('new_pending_request', payload);
   }
-
-  // Schedule 30-second auto-reassignment timer
-  const timer = setTimeout(async () => {
-    console.log(`[Dispatcher] Request ${reqKey} timed out after 30s for Exec ${selectedExec.id}. Reassigning...`);
-    activeDispatches.delete(reqKey);
-    
-    if (io) {
-      io.emit('support_request_cancelled', { reqKey, execId: selectedExec.id, reason: 'timeout' });
-    }
-
-    // Reassign adding current exec to attempted list
-    await dispatchSupportRequest(io, type, requestId, userEmail, userName, phone, [...attemptedExecIds, selectedExec.id]);
-  }, 30000);
-
-  activeDispatches.set(reqKey, {
-    timer,
-    execId: selectedExec.id,
-    type,
-    requestId,
-    userEmail,
-    userName,
-    phone,
-    attemptedExecIds: [...attemptedExecIds, selectedExec.id]
-  });
-
-  return selectedExec;
 };
 
-// Executive accepts a request
+// Executive accepts/claims a request
 const acceptRequest = async (io, type, requestId, userEmail, execId) => {
+
   const reqKey = `${type}:${requestId}`;
   if (activeDispatches.has(reqKey)) {
     clearTimeout(activeDispatches.get(reqKey).timer);
@@ -223,37 +146,8 @@ const resolveRequest = async (io, type, requestId, userEmail, execId) => {
   }
 
   // Check if there are unassigned pending requests in queue and try dispatching them now
-  checkPendingQueue(io);
+  // checkPendingQueue(io);
   return true;
-};
-
-// Background queue check for pending requests
-const checkPendingQueue = async (io) => {
-  try {
-    const pendingChats = await prisma.supportSession.findMany({
-      where: { status: 'Pending' }
-    });
-
-    for (let chat of pendingChats) {
-      const reqKey = `chat:${chat.id}`;
-      if (!activeDispatches.has(reqKey)) {
-        await dispatchSupportRequest(io, 'chat', chat.id, chat.userEmail, '', '');
-      }
-    }
-
-    const pendingCalls = await prisma.callRequest.findMany({
-      where: { status: 'Pending' }
-    });
-
-    for (let call of pendingCalls) {
-      const reqKey = `call:${call.id}`;
-      if (!activeDispatches.has(reqKey)) {
-        await dispatchSupportRequest(io, 'call', call.id, call.userEmail, call.userName, call.phone);
-      }
-    }
-  } catch (err) {
-    console.error('[Dispatcher] Error checking pending queue:', err.message);
-  }
 };
 
 module.exports = {
@@ -263,6 +157,5 @@ module.exports = {
   dispatchSupportRequest,
   acceptRequest,
   declineRequest,
-  resolveRequest,
-  checkPendingQueue
+  resolveRequest
 };

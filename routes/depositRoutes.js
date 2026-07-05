@@ -107,16 +107,7 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
       return res.status(400).json({ success: false, error: 'Amount and UTR number are required' });
     }
 
-    // Block duplicate pending deposits — one payment at a time
-    const existingPending = await prisma.manualDeposit.findFirst({
-      where: { userId: req.user.id, status: 'Pending' }
-    });
-    if (existingPending) {
-      return res.status(400).json({
-        success: false,
-        error: 'You already have a payment pending executive approval. Please wait for it to be reviewed before submitting another.'
-      });
-    }
+
 
     const existingUtr = await prisma.manualDeposit.findUnique({ where: { utrNumber } });
     if (existingUtr) {
@@ -133,7 +124,7 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
       screenshotUrl = `/uploads/${req.file.filename}`;
     }
 
-    const execId = await assignExecutive('Deposit') || await assignExecutive('Both');
+    const execId = null; // Unassigned by default, goes to Pending Queue
 
     const deposit = await prisma.manualDeposit.create({
       data: {
@@ -149,28 +140,13 @@ router.post('/submit', requireUserAuth, upload.single('screenshot'), async (req,
     });
 
     const io = req.app.get('io');
-    if (io && execId) {
-      io.emit('deposit_requested', { execId, deposit });
+    if (io) {
+      // Broadcast to all executives so they can see the new pending deposit
+      io.emit('new_pending_request', { type: 'deposit', id: deposit.id, timestamp: Date.now() });
+      io.emit('deposit_requested', { deposit });
     }
 
-    // Automatically post the manual deposit to the user's support chat
-    try {
-      const autoMsg = await prisma.supportMessage.create({
-        data: {
-          sender: 'user',
-          userEmail: req.user.email.toLowerCase(),
-          text: isUnlockDeposit
-            ? `🔓 Account Opening Fee Submitted: ₹${parsedAmount} via ${paymentMethod || 'UPI'}. UTR: ${utrNumber}. Awaiting executive approval to unlock account.`
-            : `💰 Wallet Deposit Submitted: ₹${parsedAmount} via ${paymentMethod || 'UPI'}. UTR: ${utrNumber}. Awaiting executive approval.`,
-          mediaUrl: screenshotUrl
-        }
-      });
-      if (io) {
-        io.emit('new_support_message', autoMsg);
-      }
-    } catch (chatErr) {
-      console.error('Failed to auto-create support message for deposit:', chatErr);
-    }
+
 
     res.json({ success: true, deposit, isUnlockDeposit });
   } catch (error) {
@@ -319,7 +295,7 @@ router.get('/list', requireExecAuth, async (req, res) => {
 // Exec approves/rejects a deposit
 router.post('/:id/action', requireExecAuth, async (req, res) => {
   const { id } = req.params;
-  const { action } = req.body; // 'approve' or 'reject'
+  const { action, reason } = req.body; // 'approve' or 'reject'
 
   if (!['approve', 'reject'].includes(action)) {
     return res.status(400).json({ success: false, error: 'Invalid action' });
@@ -362,7 +338,7 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
               type: 'unlock_fee',
               asset: 'wallet',
               amount: deposit.amount,
-              details: `Account unlocked via manual fee payment (UTR: ${deposit.utrNumber})`
+              details: `Account unlocked via manual fee payment (UTR: ${deposit.utrNumber}) - By Exec: ${req.executive.id}`
             }
           });
         } else {
@@ -393,24 +369,12 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
               type: 'deposit',
               asset: 'wallet',
               amount: deposit.amount,
-              details: `Manual Deposit Approved (UTR: ${deposit.utrNumber})`
+              details: `Manual Deposit Approved (UTR: ${deposit.utrNumber}) - By Exec: ${req.executive.id}`
             }
           });
         }
 
-        // Post confirmation message to support chat
-        if (user) {
-          await tx.supportMessage.create({
-            data: {
-              sender: 'executive',
-              userEmail: user.email.toLowerCase(),
-              execId: req.executive.id,
-              text: isUnlockFee
-                ? `✅ Account Opening Fee of ₹${deposit.amount} Approved! Your account is now unlocked. Welcome to Investhour! 🎉`
-                : `✅ Wallet Deposit of ₹${deposit.amount} Approved! Your wallet balance has been updated.`
-            }
-          });
-        }
+        // No longer posting confirmation messages to support chat per user request
       });
     } else if (action === 'reject') {
       await prisma.$transaction(async (tx) => {
@@ -418,17 +382,24 @@ router.post('/:id/action', requireExecAuth, async (req, res) => {
           where: { id: deposit.id },
           data: { status: 'Rejected', execId: req.executive.id }
         });
-        const user = await tx.user.findUnique({ where: { id: deposit.userId } });
-        if (user) {
-          await tx.supportMessage.create({
-            data: {
-              sender: 'executive',
-              userEmail: user.email.toLowerCase(),
-              execId: req.executive.id,
-              text: `❌ Deposit of ₹${deposit.amount} Rejected. Please contact support or submit a valid receipt.`
-            }
-          });
+        
+        let detailsString = `Manual Deposit Rejected (UTR: ${deposit.utrNumber || 'N/A'}) - By Exec: ${req.executive.id}`;
+        if (reason) {
+          detailsString += ` - Reason: ${reason}`;
         }
+
+        await tx.transaction.create({
+          data: {
+            userId: deposit.userId,
+            type: 'refund',
+            asset: 'wallet',
+            amount: deposit.amount,
+            details: detailsString
+          }
+        });
+
+        const user = await tx.user.findUnique({ where: { id: deposit.userId } });
+        // No longer posting rejection messages to support chat per user request
       });
     }
 

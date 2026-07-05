@@ -24,6 +24,7 @@ model User {
   resetToken       String?
   resetTokenExpiry DateTime?
   phone            String?
+  uniqueId         String?         @unique
   manualDeposits   ManualDeposit[]
   payments         Payment[]
   positions        Position[]
